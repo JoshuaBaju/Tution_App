@@ -52,19 +52,40 @@ export default function TeacherDashboard() {
 
   // Handle initialization and browser reloads safely
   useEffect(() => {
-    const { data: { subscription } } = supabase.auth.onAuthStateChange(async (event, session) => {
+    let isMounted = true;
+
+    // 1. Grab the initial session immediately upon refresh to prevent the async gap
+    async function syncInitialSession() {
+      const { data: { session } } = await supabase.auth.getSession();
+      
+      if (!isMounted) return;
+
       if (session?.user) {
-        await loadTeacherData(session.user.id)
+        await loadTeacherData(session.user.id);
+        setCheckingAuth(false);
       } else {
-        router.push('/login')
+        // ONLY redirect if we explicitly checked the session and found nothing
+        router.push('/login');
       }
-      setCheckingAuth(false)
-    })
+    }
+
+    syncInitialSession();
+
+    // 2. Listen to subsequent auth changes (like signing out)
+    const { data: { subscription } } = supabase.auth.onAuthStateChange(async (event, session) => {
+      if (!isMounted) return;
+
+      // Only force a login redirect if a user explicitly clicks sign out
+      if (event === 'SIGNED_OUT') {
+        router.push('/login');
+      }
+    });
 
     return () => {
-      subscription.unsubscribe()
-    }
-  }, [router])
+      isMounted = false;
+      subscription.unsubscribe();
+    };
+  }, [router]);
 
   if (checkingAuth || (loading && !teacher)) {
     return <div className="h-screen w-screen flex items-center justify-center text-slate-400 font-medium animate-pulse bg-slate-50">Entering Command Center...</div>
