@@ -124,6 +124,7 @@ export default function ParentDashboard() {
 
   const handleAddChild = async (e: React.FormEvent) => {
     e.preventDefault()
+    // Safety guard protects from null parent calls safely
     if (!parent?.id || !childName || !childEmail || !childGrade) return
     
     setAddingChild(true)
@@ -141,7 +142,9 @@ export default function ParentDashboard() {
       setAddingChild(false)
     } else {
       const inviteUrl = `${window.location.origin}/signup?token=student&email=${encodeURIComponent(childEmail)}`
-      generatedInviteUrl(inviteUrl)
+      
+      // Fixed: State setter function correctly utilized here
+      setGeneratedInviteUrl(inviteUrl)
       
       await loadParentData(parent.id)
       setAddingChild(false)
@@ -214,14 +217,12 @@ export default function ParentDashboard() {
           {activeTab === 'overview' && (
             <div className="space-y-6">
               
-              {/* MODIFIED TOP LEVEL FLEX CONTAINER WITH BOOKING CTA ROUTING */}
               <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4 border-b border-slate-100 pb-4">
                 <div>
                   <h1 className="text-xl font-black tracking-tight">Family Schedule Blueprint</h1>
                   <p className="text-xs text-slate-500 mt-0.5">Track live virtual classrooms and manage appointment windows.</p>
                 </div>
                 
-                {/* GLOBAL ACTION TRIGGER: Routes cleanly to your app/booking portal */}
                 <button
                   onClick={() => router.push('/booking')}
                   className="bg-blue-600 hover:bg-blue-700 text-white font-black text-xs uppercase tracking-wider px-5 py-3 rounded-xl transition active:scale-95 shadow-md flex items-center justify-center gap-2 self-start sm:self-auto"
@@ -269,7 +270,7 @@ export default function ParentDashboard() {
                   )}
                 </div>
 
-                {/* SELECTABLE FILTER SIDEBAR ROSTER */}
+                {/* SELECTABLE FILTER ROSTER */}
                 <div className="space-y-3">
                   <span className="text-[10px] font-black text-slate-400 uppercase tracking-wider">Filter By Child Profile</span>
                   <div className="bg-slate-50 p-4 rounded-2xl space-y-2 border border-slate-100">
@@ -453,7 +454,7 @@ export default function ParentDashboard() {
                 <div className="grid grid-cols-3 gap-2">
                   <button
                     onClick={() => {
-                      navigator.clipboard.writeText(generatedInviteUrl)
+                      navigator.clipboard.writeText(generatedInviteUrl || '')
                       alert("Link captured on your clipboard!")
                     }}
                     className="py-2 px-1 bg-blue-600 hover:bg-blue-700 text-white text-[10px] font-black rounded-lg transition"
