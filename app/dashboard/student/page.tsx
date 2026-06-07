@@ -27,7 +27,7 @@ export default function StudentDashboard() {
         .from('students')
         .select('*')
         .eq('email', userEmail)
-        .single()
+        .maybeSingle() // Safe guard to avoid throwing strict crashes on missing entries
 
       if (profileError || !profile) {
         console.error("Student profile match error:", profileError)
@@ -74,18 +74,37 @@ export default function StudentDashboard() {
     }
   }
 
-  // Handle initialization and browser reloads safely
+  // Handle initialization and browser reloads cleanly across production servers
   useEffect(() => {
-    const { data: { subscription } } = supabase.auth.onAuthStateChange(async (event, session) => {
+    let isMounted = true
+
+    async function syncInitialSession() {
+      // 1. Instantly pull cached access tokens to beat the async onAuthStateChange lag
+      const { data: { session } } = await supabase.auth.getSession()
+      
+      if (!isMounted) return
+
       if (session?.user?.email) {
         await loadStudentData(session.user.email)
+        setCheckingAuth(false)
       } else {
+        // No valid local cookie session: boot to login safely
         router.push('/login')
       }
-      setCheckingAuth(false)
+    }
+
+    syncInitialSession()
+
+    // 2. Background observer to immediately process intentional logouts
+    const { data: { subscription } } = supabase.auth.onAuthStateChange(async (event) => {
+      if (!isMounted) return
+      if (event === 'SIGNED_OUT') {
+        router.push('/login')
+      }
     })
 
     return () => {
+      isMounted = false
       subscription.unsubscribe()
     }
   }, [router])
@@ -93,8 +112,8 @@ export default function StudentDashboard() {
   // Isolate the immediate next class if one exists
   const nextClass = upcomingClasses[0]
 
-  // Guard screen checking identity statuses on reload
-  if (checkingAuth || (loading && !student)) {
+  // Dedicated layout guard checks exclusively against our base verification mounting state
+  if (checkingAuth) {
     return <div className="h-screen w-screen flex items-center justify-center text-slate-400 font-medium animate-pulse bg-slate-50">Opening Student Hub...</div>
   }
 

@@ -12,22 +12,61 @@ interface Teacher {
   photo_url: string
 }
 
-// Master list matching your signup definitions
+interface Student {
+  id: string
+  name: string
+}
+
 const AVAILABLE_SUBJECTS = ['Mathematics', 'Physics', 'Chemistry', 'Biology', 'English', 'History', 'Geography', 'Computer Science']
 
 export default function BookingProcedure() {
   const router = useRouter()
   const [teachers, setTeachers] = useState<Teacher[]>([])
+  const [students, setStudents] = useState<Student[]>([])
+  const [selectedStudent, setSelectedStudent] = useState<string>('')
   const [loading, setLoading] = useState(true)
 
   // Filtering States
   const [searchQuery, setSearchQuery] = useState('')
   const [selectedSubjectFilter, setSelectedSubjectFilter] = useState<string>('')
-  const [maxRateFilter, setMaxRateFilter] = useState<number>(150) // Default max range ceiling
+  const [maxRateFilter, setMaxRateFilter] = useState<number>(150) 
 
   useEffect(() => {
-    async function fetchCatalog() {
+    async function initializeBookingSecurityAndData() {
       setLoading(true)
+
+      // 1. Core Auth Guard Check
+      const { data: { user }, error: authError } = await supabase.auth.getUser()
+      if (authError || !user) {
+        router.push('/login')
+        return
+      }
+
+      // Query the actual parent table directly to verify the active role
+      const { data: parentProfile, error: parentError } = await supabase
+        .from('parents')
+        .select('id')
+        .eq('email', user.email)
+        .maybeSingle()
+
+      if (parentError || !parentProfile) {
+        console.warn("Access denied: User record not found in Parents database.")
+        router.push('/login')
+        return
+      }
+
+      // Fetch children managed by this parent profile to handle room booking allocations
+      const { data: childrenData } = await supabase
+        .from('students')
+        .select('id, name')
+        .eq('parent_id', parentProfile.id)
+
+      if (childrenData) {
+        setStudents(childrenData)
+        if (childrenData.length > 0) setSelectedStudent(childrenData[0].id)
+      }
+
+      // 2. Fetch Active Teacher Directory Feeds
       const { data, error } = await supabase
         .from('teachers')
         .select('id, name, bio, subjects, rate, photo_url')
@@ -37,7 +76,6 @@ export default function BookingProcedure() {
       } else if (data) {
         setTeachers(data as Teacher[])
         
-        // Dynamically calibrate the filter slider ceiling to match the highest rate in your database
         if (data.length > 0) {
           const highestRate = Math.max(...data.map(t => t.rate || 0))
           setMaxRateFilter(highestRate > 0 ? highestRate : 150)
@@ -45,10 +83,10 @@ export default function BookingProcedure() {
       }
       setLoading(false)
     }
-    fetchCatalog()
-  }, [])
 
-  // 1. Core Real-Time Search & Filtering Logic
+    initializeBookingSecurityAndData()
+  }, [router])
+
   const filteredTeachers = teachers.filter(teacher => {
     const matchesName = teacher.name?.toLowerCase().includes(searchQuery.toLowerCase())
     const matchesSubject = selectedSubjectFilter === '' || teacher.subjects?.includes(selectedSubjectFilter)
@@ -61,38 +99,57 @@ export default function BookingProcedure() {
     <div className="min-h-screen bg-slate-50 text-slate-900 p-6 sm:p-10">
       <div className="max-w-5xl mx-auto">
         
-        {/* Header Terminal */}
-        <div className="mb-8 flex justify-between items-center">
+        {/* Header Ribbon Row Layout */}
+        <div className="mb-8 flex flex-col sm:flex-row gap-4 justify-between items-start sm:items-center">
           <div>
-            <h1 className="text-3xl font-black text-slate-900 tracking-tight">Booking Procedure</h1>
-            <p className="text-sm text-slate-500">Search, filter, and discover your perfect home tutor match</p>
+            <h1 className="text-3xl font-black text-slate-900 tracking-tight">Find an Educator</h1>
+            <p className="text-sm text-slate-500">Search, filter, and discover your perfect live tutor match</p>
           </div>
+          
           <button 
-            onClick={() => router.push('/')} 
-            className="px-4 py-2 text-sm font-bold text-slate-600 bg-white border border-slate-200 rounded-xl hover:bg-slate-100 transition"
+            type="button"
+            onClick={() => router.push('/dashboard/parent')} 
+            className="px-4 py-2.5 text-xs font-bold text-slate-600 bg-white border border-slate-200 uppercase tracking-wider rounded-xl hover:bg-slate-100 transition shadow-xs"
           >
-            Home
+            ← Back to Dashboard
           </button>
         </div>
 
-        {/* Control Panel: Search Bar & Filters Dashboard Container */}
+        {/* Filters and Selection Parameters Card */}
         <div className="bg-white border border-slate-200 rounded-2xl p-6 shadow-sm mb-6 space-y-5">
           
-          {/* A. Top Section: Text Search Bar */}
+          {/* Linked Context Student Selection Block */}
+          {students.length > 0 && (
+            <div className="bg-blue-50/50 border border-blue-100 rounded-xl p-4 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3">
+              <div>
+                <h4 className="text-xs font-black uppercase text-blue-800 tracking-wide">Assign Lesson Target</h4>
+                <p className="text-xs text-slate-500">Select the student profile to associate with this booking entry.</p>
+              </div>
+              <select 
+                className="p-2 border border-blue-200 rounded-lg bg-white text-sm font-bold text-slate-700 outline-none focus:ring-2 focus:ring-blue-500 cursor-pointer min-w-[200px]"
+                value={selectedStudent}
+                onChange={e => setSelectedStudent(e.target.value)}
+              >
+                {students.map(student => (
+                  <option key={student.id} value={student.id}>Student: {student.name}</option>
+                ))}
+              </select>
+            </div>
+          )}
+
+          {/* Text Search Inputs */}
           <div className="relative">
             <input 
               type="text"
-              placeholder="🔍 Search teachers by name..."
-              className="w-full p-3.5 pl-11 border border-slate-200 rounded-xl bg-slate-50 focus:bg-white focus:ring-2 focus:ring-blue-500 outline-none transition font-medium"
+              placeholder="Search teachers by name..."
+              className="w-full p-3.5 pl-4 border border-slate-200 rounded-xl bg-slate-50 focus:bg-white focus:ring-2 focus:ring-blue-500 outline-none transition font-medium"
               value={searchQuery}
               onChange={e => setSearchQuery(e.target.value)}
             />
           </div>
 
-          {/* B. Grid Segment: Subject Filter & Hourly Price Slider */}
+          {/* Parameter Customization Grid */}
           <div className="grid grid-cols-1 md:grid-cols-2 gap-6 pt-2">
-            
-            {/* Subject Dropdown Filter */}
             <div className="flex flex-col gap-2">
               <label className="text-xs font-black uppercase tracking-wider text-slate-400">Filter By Subject</label>
               <select
@@ -107,7 +164,6 @@ export default function BookingProcedure() {
               </select>
             </div>
 
-            {/* Price Budget Range Slider */}
             <div className="flex flex-col gap-2">
               <div className="flex justify-between items-center">
                 <label className="text-xs font-black uppercase tracking-wider text-slate-400">Maximum Hourly Budget</label>
@@ -122,34 +178,28 @@ export default function BookingProcedure() {
                 value={maxRateFilter}
                 onChange={e => setMaxRateFilter(Number(e.target.value))}
               />
-              <div className="flex justify-between text-[10px] text-slate-400 font-bold px-1">
-                <span>$0 / HR</span>
-                <span>$200 / HR</span>
-              </div>
             </div>
-
           </div>
         </div>
 
-        {/* Dynamic Display Catalog Engine */}
+        {/* Dynamic Catalog Grid */}
         {loading ? (
           <div className="flex flex-col items-center justify-center py-20 space-y-3">
             <div className="w-8 h-8 border-4 border-blue-600 border-t-transparent rounded-full animate-spin"></div>
-            <p className="text-sm font-medium text-slate-500">Syncing database feed...</p>
+            <p className="text-sm font-medium text-slate-500">Syncing database parameters...</p>
           </div>
         ) : filteredTeachers.length === 0 ? (
           <div className="text-center py-16 bg-white rounded-2xl border border-dashed border-slate-200 p-6">
-            <p className="text-slate-400 font-medium">No educators match your active search filter targets.</p>
+            <p className="text-slate-400 font-medium">No educators match your active search filters.</p>
           </div>
         ) : (
-          /* Map List View Rows */
           <div className="flex flex-col gap-4">
             {filteredTeachers.map((teacher) => (
               <div 
                 key={teacher.id}
                 className="flex flex-col sm:flex-row items-center bg-white border border-slate-200 rounded-2xl p-5 shadow-sm hover:shadow-md transition gap-6 w-full"
               >
-                {/* 1. Profile Image Component */}
+                {/* Profile Image Avatar */}
                 <div className="w-24 h-24 sm:w-28 sm:h-28 rounded-xl overflow-hidden bg-slate-100 border border-slate-200 flex-shrink-0 relative flex items-center justify-center">
                   {teacher.photo_url ? (
                     <img src={teacher.photo_url} alt={teacher.name} className="w-full h-full object-cover" />
@@ -160,31 +210,23 @@ export default function BookingProcedure() {
                   )}
                 </div>
 
-                {/* 2. Text Content Block */}
+                {/* Info Text Meta Columns */}
                 <div className="flex-1 text-center sm:text-left min-w-0">
                   <h2 className="text-xl font-bold text-slate-900 truncate">{teacher.name}</h2>
                   <p className="text-sm text-slate-500 mt-1.5 leading-relaxed">
-                    {teacher.bio ? (teacher.bio.length > 140 ? teacher.bio.substring(0, 140) + "..." : teacher.bio) : "No description bios provided."}
+                    {teacher.bio ? (teacher.bio.length > 140 ? teacher.bio.substring(0, 140) + "..." : teacher.bio) : "No bio description provided."}
                   </p>
-                </div>
-
-                {/* 3. Subjects Box Tags (Small rounded edged boxes) */}
-                <div className="flex flex-wrap gap-1.5 justify-center max-w-[200px] py-2">
-                  {teacher.subjects && teacher.subjects.length > 0 ? (
-                    teacher.subjects.map((sub) => (
-                      <span 
-                        key={sub} 
-                        className="bg-slate-100 text-slate-700 text-[11px] px-2.5 py-1 rounded-md font-semibold border border-slate-200 tracking-wide shadow-2xs whitespace-nowrap"
-                      >
+                  
+                  <div className="flex flex-wrap gap-1.5 justify-center sm:justify-start mt-3">
+                    {teacher.subjects?.map((sub) => (
+                      <span key={sub} className="bg-slate-100 text-slate-700 text-[10px] px-2.5 py-1 rounded-md font-bold border border-slate-200 uppercase tracking-wide">
                         {sub}
                       </span>
-                    ))
-                  ) : (
-                    <span className="text-xs text-slate-400 italic">General Studies</span>
-                  )}
+                    )) || <span className="text-xs text-slate-400 italic">General Studies</span>}
+                  </div>
                 </div>
 
-                {/* 4. Pricing / Action Column Section Layout */}
+                {/* Pricing & Forward Redirection Action Buttons */}
                 <div className="sm:border-l border-slate-100 sm:pl-6 flex flex-col items-center sm:items-end justify-center min-w-[140px] gap-2">
                   <div className="text-center sm:text-right">
                     <span className="text-2xl font-black text-slate-900">${teacher.rate}</span>
@@ -192,10 +234,18 @@ export default function BookingProcedure() {
                   </div>
                   
                   <button
-                    onClick={() => router.push(`/booking/teacher/${teacher.id}`)}
-                    className="w-full bg-blue-600 hover:bg-blue-700 text-white font-bold text-sm py-2.5 px-4 rounded-xl shadow-sm hover:shadow transition active:scale-95 text-center whitespace-nowrap"
+                    type="button"
+                    onClick={() => {
+                      if (!selectedStudent && students.length > 0) {
+                        alert("Please select a student profile before scheduling lessons.")
+                        return
+                      }
+                      // Forwards both the target teacher ID and student parameter contexts downstream
+                      router.push(`/booking/teacher/${teacher.id}?student=${selectedStudent}`)
+                    }}
+                    className="w-full bg-blue-600 hover:bg-blue-700 text-white font-black text-xs uppercase tracking-wider py-3 px-4 rounded-xl transition active:scale-95 text-center whitespace-nowrap shadow-sm"
                   >
-                    See More
+                    Select Tutor
                   </button>
                 </div>
 
