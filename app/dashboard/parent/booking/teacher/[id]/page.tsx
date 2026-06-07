@@ -2,7 +2,7 @@
 import { useEffect, useState } from 'react'
 import { supabase } from '@/lib/supabase'
 import { useRouter, useParams } from 'next/navigation'
-import BookingModal from '@/app/booking/BookingModal'
+import BookingModal from '@/app/dashboard/parent/booking/BookingModal'
 
 interface TeacherProfile {
   id: string
