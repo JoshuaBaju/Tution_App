@@ -35,12 +35,11 @@ export default function ParentDashboard() {
   // Asset Monitoring States
   const [selectedChildLocker, setSelectedChildLocker] = useState('')
 
-  // Upgraded Data Fetcher: Accepts verified userId parameter directly from the auth listener
   async function loadParentData(userId: string) {
     try {
       setLoading(true)
 
-      // 1. Fetch parent profile row safely using the verified ID
+      // 1. Fetch parent profile row
       const { data: profile, error: profileError } = await supabase
         .from('parents')
         .select('*')
@@ -108,14 +107,11 @@ export default function ParentDashboard() {
     }
   }
 
-  // Handle initialization and browser reloads safely
   useEffect(() => {
     const { data: { subscription } } = supabase.auth.onAuthStateChange(async (event, session) => {
       if (session?.user) {
-        // Safe to pull user data now that the session is officially restored from browser cookies
         await loadParentData(session.user.id)
       } else {
-        // No session found, send away securely
         router.push('/login')
       }
       setCheckingAuth(false)
@@ -145,7 +141,7 @@ export default function ParentDashboard() {
       setAddingChild(false)
     } else {
       const inviteUrl = `${window.location.origin}/signup?token=student&email=${encodeURIComponent(childEmail)}`
-      setGeneratedInviteUrl(inviteUrl)
+      generatedInviteUrl(inviteUrl)
       
       await loadParentData(parent.id)
       setAddingChild(false)
@@ -160,12 +156,10 @@ export default function ParentDashboard() {
     setChildGrade('')
   }
 
-  // Filter logic for upcoming bookings layout array
   const displayedBookings = selectedChildFilter 
     ? bookings.filter(b => b.student_id === selectedChildFilter)
     : bookings
 
-  // Guard screen checking identities on refresh
   if (checkingAuth || (loading && !parent)) {
     return <div className="h-screen w-screen flex items-center justify-center text-slate-400 font-medium animate-pulse bg-slate-50">Verifying Parent Credentials...</div>
   }
@@ -216,10 +210,25 @@ export default function ParentDashboard() {
 
         <div className="p-8 flex-1 overflow-y-auto max-w-5xl w-full mx-auto">
           
-          {/* TAB 1: OVERVIEW TIMELINE WITH FILTER MECHANICS */}
+          {/* TAB 1: OVERVIEW TIMELINE */}
           {activeTab === 'overview' && (
             <div className="space-y-6">
-              <h1 className="text-xl font-black tracking-tight">Family Schedule Blueprint</h1>
+              
+              {/* MODIFIED TOP LEVEL FLEX CONTAINER WITH BOOKING CTA ROUTING */}
+              <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4 border-b border-slate-100 pb-4">
+                <div>
+                  <h1 className="text-xl font-black tracking-tight">Family Schedule Blueprint</h1>
+                  <p className="text-xs text-slate-500 mt-0.5">Track live virtual classrooms and manage appointment windows.</p>
+                </div>
+                
+                {/* GLOBAL ACTION TRIGGER: Routes cleanly to your app/booking portal */}
+                <button
+                  onClick={() => router.push('/booking')}
+                  className="bg-blue-600 hover:bg-blue-700 text-white font-black text-xs uppercase tracking-wider px-5 py-3 rounded-xl transition active:scale-95 shadow-md flex items-center justify-center gap-2 self-start sm:self-auto"
+                >
+                  🗓️ Schedule a New Lesson
+                </button>
+              </div>
               
               <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
                 <div className="md:col-span-2 space-y-3">
@@ -286,11 +295,10 @@ export default function ParentDashboard() {
             </div>
           )}
 
-          {/* TAB 2: ROSTER REGISTRY & HISTORICAL TEACHER EXAMINATIONS */}
+          {/* TAB 2: ROSTER REGISTRY */}
           {activeTab === 'children' && (
             <div className="grid grid-cols-1 md:grid-cols-5 gap-8 items-start">
               
-              {/* Left Column: Children Cards + Relational Past Session Reviews */}
               <div className="md:col-span-2 space-y-5">
                 <div className="flex items-center justify-between border-b border-slate-100 pb-2">
                   <span className="text-[10px] font-black uppercase tracking-wider text-slate-400">Roster Registry</span>
@@ -318,7 +326,6 @@ export default function ParentDashboard() {
                           <span className="text-[10px] font-bold bg-slate-100 text-slate-600 px-2 py-0.5 rounded-md">{c.grade}</span>
                         </div>
 
-                        {/* SUB-SECTION: PAST EXAMINATIONS & REPORTS */}
                         <div className="space-y-1.5">
                           <p className="text-[9px] font-black text-slate-400 uppercase tracking-tight">Recent Progress Reports</p>
                           {pastClasses.filter(p => p.student_id === c.id).length === 0 ? (
@@ -346,7 +353,6 @@ export default function ParentDashboard() {
                 </div>
               </div>
 
-              {/* Right Column: Shared Resource Lockers Viewer */}
               <div className="md:col-span-3 space-y-4 h-[550px] flex flex-col">
                 <div className="flex flex-col gap-1">
                   <label className="text-[10px] font-black text-slate-400 uppercase tracking-wider">Review Shared Homework Lockers</label>
@@ -431,7 +437,6 @@ export default function ParentDashboard() {
                 </form>
               </>
             ) : (
-              /* ONE-TIME LINK DISPLAY SCREEN */
               <div className="text-center space-y-4 py-2 animate-fadeIn">
                 <div className="w-12 h-12 bg-green-50 text-green-600 rounded-full flex items-center justify-center mx-auto text-xl shadow-xs">
                   🎉
