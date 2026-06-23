@@ -1,6 +1,5 @@
-// app/dashboard/post-demo/page.tsx
 "use client"
-import { useState, useEffect } from 'react'
+import { useState, useEffect, Suspense } from 'react' // 👈 Added Suspense here
 import { useSearchParams, useRouter } from 'next/navigation'
 import { supabase } from '@/lib/supabase'
 import Link from 'next/link'
@@ -18,7 +17,8 @@ import {
   parseISO
 } from 'date-fns'
 
-export default function UnifiedPostDemoWorkflow() {
+// 1. Rename your main logic component to a sub-component
+function UnifiedPostDemoContent() {
   const searchParams = useSearchParams()
   const router = useRouter()
   const bookingId = searchParams.get('booking')
@@ -491,6 +491,7 @@ export default function UnifiedPostDemoWorkflow() {
         </div>
       )}
 
+      {/* PHASE 3 (TEACHER VIEW STATUS) */}
       {booking.status === 'payment_pending' && userRole === 'teacher' && (
         <div className="p-8 text-center border border-dashed rounded-2xl text-slate-400 font-medium text-xs">💳 Schedule approved! Waiting for parent to settle invoice calculations at checkout...</div>
       )}
@@ -560,5 +561,14 @@ export default function UnifiedPostDemoWorkflow() {
       )}
 
     </div>
+  )
+}
+
+// 2. EXPORT A DEFAULT WRAPPER ROOT WRAPPED IN A SUSPENSE CONTAINER 
+export default function UnifiedPostDemoWorkflow() {
+  return (
+    <Suspense fallback={<div className="p-12 text-center text-xs font-bold text-slate-400 animate-pulse tracking-widest">LOADING CONTENT CONTAINER STAGE...</div>}>
+      <UnifiedPostDemoContent />
+    </Suspense>
   )
 }
