@@ -17,8 +17,10 @@ function SignupFormContent() {
   const router = useRouter()
   const searchParams = useSearchParams()
 
-  const isStudentInvite = searchParams.get('token') === 'student'
+  // MATCHES PARAMS: ?student_id=e527b452...&email=trisha%40gmail.com
+  const targetStudentId = searchParams.get('student_id')
   const inviteEmail = searchParams.get('email') || ''
+  const isStudentInvite = !!targetStudentId // True if a student ID parameter exists
 
   const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
@@ -39,6 +41,7 @@ function SignupFormContent() {
   const [selectedSlots, setSelectedSlots] = useState<string[]>([])
   const [photoFile, setPhotoFile] = useState<File | null>(null)
 
+  // Sync state if student email arrives via parameter payload
   useEffect(() => {
     if (isStudentInvite && inviteEmail) {
       setEmail(inviteEmail.trim())
@@ -77,7 +80,7 @@ function SignupFormContent() {
 
     if (!isStudentInvite && role === 'parent') {
       if (!parentName || !phone || !country) {
-        alert("Parents must fill in Name, Phone Number, and Country.");
+        alert("Parents must fill in Name, Phone Number, and Country.")
         setLoading(false)
         return
       }
@@ -85,7 +88,7 @@ function SignupFormContent() {
 
     if (!isStudentInvite && role === 'teacher') {
       if (!teacherName || !bio || selectedSubjects.length === 0 || !rate || selectedDays.length === 0 || selectedSlots.length === 0) {
-        alert("Teachers must fill in all fields and select at least one Subject, Day, and Time Slot.");
+        alert("Teachers must fill in all fields and select at least one Subject, Day, and Time Slot.")
         setLoading(false)
         return
       }
@@ -109,11 +112,11 @@ function SignupFormContent() {
 
         // 2. Execution Pipeline Routes Based on Roles
         if (isStudentInvite) {
-          // Link Auth instance safely without resetting the database row identifier
+          // Updates placeholder row ID with real Auth UID to maintain data consistency
           const { error: dbError } = await supabase
             .from('students')
-            .update({ auth_id: userId }) 
-            .eq('email', email.trim())
+            .update({ id: userId }) 
+            .eq('id', targetStudentId)
 
           if (dbError) {
             alert("Student Account Link Error: " + dbError.message)
@@ -218,15 +221,24 @@ function SignupFormContent() {
         )}
 
         <form onSubmit={handleSignup} className="space-y-4">
-          <input 
-            type="email" 
-            placeholder="Email Address" 
-            disabled={isStudentInvite} 
-            className={`w-full p-3 border rounded-lg focus:ring-2 focus:ring-blue-500 outline-none bg-white ${isStudentInvite ? 'bg-slate-50 text-slate-400 cursor-not-allowed border-slate-200' : ''}`} 
-            value={email} 
-            onChange={e => setEmail(e.target.value)} 
-            required
-          />
+          <div className="space-y-1">
+            {isStudentInvite && (
+              <div className="flex justify-between items-center px-1">
+                <span className="text-[10px] uppercase font-black tracking-wider text-slate-400">Assigned Profile Email</span>
+                <span className="text-[10px] font-bold text-slate-400">🔒 Locked by Parent</span>
+              </div>
+            )}
+            <input 
+              type="email" 
+              placeholder="Email Address" 
+              disabled={isStudentInvite} 
+              className={`w-full p-3 border rounded-lg focus:ring-2 focus:ring-blue-500 outline-none bg-white ${isStudentInvite ? 'bg-slate-100/80 text-slate-400 cursor-not-allowed border-slate-200 font-semibold select-none' : ''}`} 
+              value={email} 
+              onChange={e => setEmail(e.target.value)} 
+              required
+            />
+          </div>
+
           <input 
             type="password" 
             placeholder={isStudentInvite ? "Choose a Secure Password" : "Create Password"} 

@@ -19,68 +19,66 @@ export default function Login() {
       return
     }
 
-    // 1. Sign the user into Supabase Auth
-    const { data, error } = await supabase.auth.signInWithPassword({
-      email,
-      password,
-    })
+    try {
+      // 1. Sign the user into Supabase Auth
+      const { data, error } = await supabase.auth.signInWithPassword({
+        email: email.trim(),
+        password,
+      })
 
-    if (error) {
-      alert("Login Failed: " + error.message)
+      if (error) {
+        alert("Login Failed: " + error.message)
+        setLoading(false)
+        return
+      }
+
+      if (data?.user) {
+        const userEmail = data.user.email
+
+        // 2. Cross-check Step A: Are they a Parent?
+        const { data: parentData } = await supabase
+          .from('parents')
+          .select('id')
+          .eq('email', userEmail)
+          .maybeSingle() 
+
+        if (parentData) {
+          router.push('/dashboard/parent')
+          return
+        }
+
+        // 3. Cross-check Step B: Are they a Teacher?
+        const { data: teacherData } = await supabase
+          .from('teachers')
+          .select('id')
+          .eq('email', userEmail)
+          .maybeSingle()
+
+        if (teacherData) {
+          router.push('/dashboard/teacher')
+          return
+        }
+
+        // 4. Cross-check Step C: Are they a Student?
+        const { data: studentData } = await supabase
+          .from('students') 
+          .select('id')
+          .eq('email', userEmail)
+          .maybeSingle()
+
+        if (studentData) {
+          router.push('/dashboard/student')
+          return
+        }
+
+        // Fallback if auth account exists but profile creation failed during signup
+        alert("Logged in successfully, but no matching profile role was found.")
+      }
+    } catch (err) {
+      console.error("Unexpected authentication error:", err)
+    } finally {
       setLoading(false)
-      return
     }
-
-    if (data.user) {
-      const userId = data.user.id
-
-      // 2. Cross-check Step A: Are they a Parent?
-      const { data: parentData } = await supabase
-        .from('parents')
-        .select('id')
-        .eq('id', userId)
-        .maybeSingle() // Prevents throwing an error if not found
-
-      if (parentData) {
-        alert("Welcome back, Parent!")
-        router.push('/dashboard/parent')
-        setLoading(false)
-        return
-      }
-
-      // 3. Cross-check Step B: Are they a Teacher?
-      const { data: teacherData } = await supabase
-        .from('teachers')
-        .select('id')
-        .eq('id', userId)
-        .maybeSingle()
-
-      if (teacherData) {
-        alert("Welcome back, Teacher!")
-        router.push('/dashboard/teacher')
-        setLoading(false)
-        return
-      }
-
-      // 4. Cross-check Step C: Are they a Student?
-      const { data: studentData } = await supabase
-        .from('students') // Assumes your student table name is lowercase 'students'
-        .select('id')
-        .eq('id', userId)
-        .maybeSingle()
-
-      if (studentData) {
-        alert("Welcome back, Student!")
-        router.push('/dashboard/student')
-        setLoading(false)
-        return
-      }
-
-      // Fallback if auth account exists but profile creation failed during signup
-      alert("Logged in successfully, but no Parent, Teacher, or Student profile was found.")
-    }
-    
-    setLoading(false)
   }
 
   return (
@@ -89,26 +87,36 @@ export default function Login() {
         <h1 className="text-3xl font-black mb-2 text-center text-blue-600">Welcome Back</h1>
         <p className="text-center text-slate-500 mb-6">Log into your Tuition Hero account</p>
 
-        <div className="space-y-4">
-          <input 
-            type="email" 
-            placeholder="Email Address" 
-            className="w-full p-3 border rounded-lg focus:ring-2 focus:ring-blue-500 outline-none bg-white" 
-            value={email} 
-            onChange={e => setEmail(e.target.value)} 
-          />
-          <input 
-            type="password" 
-            placeholder="Password" 
-            className="w-full p-3 border rounded-lg focus:ring-2 focus:ring-blue-500 outline-none bg-white" 
-            value={password} 
-            onChange={e => setPassword(e.target.value)} 
-          />
+        {/* Wrapped in a semantic form for instant desktop/mobile accessibility */}
+        <form onSubmit={handleLogin} className="space-y-4">
+          <div>
+            <label className="block text-[10px] font-black uppercase tracking-wider text-slate-400 mb-1 pl-1">Email Address</label>
+            <input 
+              type="email" 
+              placeholder="name@domain.com" 
+              className="w-full p-3 border border-slate-200 rounded-lg focus:ring-2 focus:ring-blue-500 outline-none bg-white text-sm" 
+              value={email} 
+              onChange={e => setEmail(e.target.value)} 
+              required
+            />
+          </div>
+
+          <div>
+            <label className="block text-[10px] font-black uppercase tracking-wider text-slate-400 mb-1 pl-1">Password</label>
+            <input 
+              type="password" 
+              placeholder="••••••••" 
+              className="w-full p-3 border border-slate-200 rounded-lg focus:ring-2 focus:ring-blue-500 outline-none bg-white text-sm" 
+              value={password} 
+              onChange={e => setPassword(e.target.value)} 
+              required
+            />
+          </div>
           
           <button 
-            onClick={handleLogin} 
+            type="submit"
             disabled={loading} 
-            className="w-full py-4 bg-blue-600 text-white rounded-xl font-black text-lg hover:bg-blue-700 transition disabled:bg-slate-400"
+            className="w-full py-4 bg-blue-600 text-white rounded-xl font-black text-lg hover:bg-blue-700 transition disabled:bg-slate-400 mt-2 shadow-md shadow-blue-600/10"
           >
             {loading ? 'Logging in...' : 'Sign In'}
           </button>
@@ -119,7 +127,7 @@ export default function Login() {
               Sign Up
             </button>
           </p>
-        </div>
+        </form>
       </div>
     </div>
   )

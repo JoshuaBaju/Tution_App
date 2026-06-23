@@ -1,3 +1,4 @@
+// components/BookingModal.tsx
 "use client"
 import { useState, useEffect } from 'react'
 import { supabase } from '@/lib/supabase'
@@ -23,12 +24,13 @@ interface BookingModalProps {
   timeSlots: string[]        
   rate: number
   subject: string
+  studentId: string 
+  parentId: string   
 }
 
-interface Student {
-  id: string
-  name: string
-  grade?: string
+interface ConfirmedDemoBooking {
+  demo_booking_date: string
+  demo_time_slot: string
 }
 
 export default function BookingModal({ 
@@ -39,57 +41,61 @@ export default function BookingModal({
   baseAvailableDays, 
   timeSlots, 
   rate,
-  subject
+  subject,
+  studentId, 
+  parentId   
 }: BookingModalProps) {
   
   const [currentMonth, setCurrentMonth] = useState(new Date()) 
-  const [maxLessons, setMaxLessons] = useState<number>(4) 
   const [selectedDates, setSelectedDates] = useState<Date[]>([]) 
-  const [existingBookings, setExistingBookings] = useState<string[]>([]) 
+  const [existingBookings, setExistingBookings] = useState<ConfirmedDemoBooking[]>([]) 
   const [selectedTimeSlot, setSelectedTimeSlot] = useState<string>('')
-  const [students, setStudents] = useState<Student[]>([])
-  const [selectedStudentId, setSelectedStudentId] = useState<string>('')
+  const [demoTopic, setDemoTopic] = useState<string>('')
+  const [studentName, setStudentName] = useState<string>('Loading Profile...')
   const [submitting, setSubmitting] = useState(false)
 
   const weekDaysHeader = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat']
   const today = startOfDay(new Date()) 
+  const maxLessons = 1 // Hardcoded strict constraint for initial demo phase
 
-  // Fetch booked dates for teacher
+  // Fetch booked slots for teacher using updated demographic criteria
   useEffect(() => {
     if (!isOpen) return
     async function fetchBookedDates() {
-      const { data, error } = await supabase
+      const { data } = await supabase
         .from('bookings')
-        .select('booking_date')
-        .eq('teacher_id', teacherId)
-        .eq('status', 'confirmed')
+        .select('demo_booking_date, demo_time_slot')
+        .eq('teacher', teacherId)
+        .in('status', ['demo_pending', 'parent_approval_pending', 'waiting_teacher_confirmation', 'payment_pending', 'booked', 'active'])
 
       if (data) {
-        setExistingBookings(data.map(b => b.booking_date))
+        setExistingBookings(data as any[])
       }
     }
     fetchBookedDates()
   }, [isOpen, teacherId])
 
-  // Fetch children profiles tied to authenticated parent account
+  // Reset selected dates when the parent changes the time slot selection
   useEffect(() => {
-    if (!isOpen) return
-    async function fetchParentChildren() {
-      const { data: { user } } = await supabase.auth.getUser()
-      if (!user) return
+    setSelectedDates([])
+  }, [selectedTimeSlot])
 
-      const { data, error } = await supabase
+  // Fetch student profile text display name
+  useEffect(() => {
+    if (!isOpen || !studentId) return
+    async function fetchActiveStudentDetails() {
+      const { data } = await supabase
         .from('students')
-        .select('id, name, grade')
-        .eq('parent_id', user.id) // Matches parent reference constraint
+        .select('name')
+        .eq('id', studentId)
+        .maybeSingle()
 
-      if (data && data.length > 0) {
-        setStudents(data)
-        setSelectedStudentId(data[0].id) // Default auto-selection to first child found
+      if (data?.name) {
+        setStudentName(data.name)
       }
     }
-    fetchParentChildren()
-  }, [isOpen])
+    fetchActiveStudentDetails()
+  }, [isOpen, studentId])
 
   if (!isOpen) return null
 
@@ -97,6 +103,13 @@ export default function BookingModal({
   const monthEnd = endOfMonth(currentMonth)
   const daysInMonth = eachDayOfInterval({ start: monthStart, end: monthEnd })
   const startOffset = getDay(monthStart) 
+
+  const isSlotAlreadyBooked = (dateString: string) => {
+    if (!selectedTimeSlot) return false
+    return existingBookings.some(
+      b => b.demo_booking_date === dateString && b.demo_time_slot === selectedTimeSlot
+    )
+  }
 
   const getDateStatus = (date: Date) => {
     const dateString = format(date, 'yyyy-MM-dd')
@@ -108,79 +121,83 @@ export default function BookingModal({
 
     if (selectedDates.some(d => isSameDay(d, date))) return 'bg-red-500 text-white font-bold'
     
-    if (existingBookings.includes(dateString)) return 'bg-emerald-500 text-white font-bold cursor-not-allowed'
+    if (selectedTimeSlot && isSlotAlreadyBooked(dateString)) {
+      return 'bg-emerald-500 text-white font-bold cursor-not-allowed'
+    }
     
     if (baseAvailableDays.includes(dayName)) {
-      return 'bg-blue-50 text-blue-600 border border-blue-200 hover:bg-blue-500 hover:text-white cursor-pointer'
+      return selectedTimeSlot 
+        ? 'bg-blue-50 text-blue-600 border border-blue-200 hover:bg-blue-500 hover:text-white cursor-pointer'
+        : 'bg-blue-50/40 text-blue-400 border border-blue-100 cursor-pointer'
     }
     
     return 'bg-slate-100 text-slate-300 cursor-not-allowed' 
   }
 
   const handleDayClick = (date: Date) => {
+    if (!selectedTimeSlot) {
+      alert("Please select a session time window first before mapping dates.")
+      return
+    }
     if (isBefore(startOfDay(date), today)) return
 
     const dayName = format(date, 'EEEE')
     const dateString = format(date, 'yyyy-MM-dd')
     
-    if (!baseAvailableDays.includes(dayName) || existingBookings.includes(dateString)) return
+    if (!baseAvailableDays.includes(dayName) || isSlotAlreadyBooked(dateString)) return
 
     if (selectedDates.some(d => isSameDay(d, date))) {
-      setSelectedDates(prev => prev.filter(d => !isSameDay(d, date)))
+      setSelectedDates([])
     } else {
-      if (selectedDates.length >= maxLessons) {
-        alert(`You can only select up to ${maxLessons} lessons.`)
-        return
-      }
-      setSelectedDates(prev => [...prev, date])
+      setSelectedDates([date]) // Enforces singular selection assignment overrides
     }
   }
 
-  const handleHeaderClick = (dayIndex: number) => {
-    const targetDayName = weekDaysHeader[dayIndex] 
-    const fullDayNames: Record<string, string> = { 'Mon': 'Monday', 'Tue': 'Tuesday', 'Wed': 'Wednesday', 'Thu': 'Thursday', 'Fri': 'Friday', 'Sat': 'Saturday', 'Sun': 'Sunday' }
-    const targetFullName = fullDayNames[targetDayName]
+  const initializeClassroomFolder = async (tId: string, sId: string) => {
+    const folderName = `${tId}_${sId}`
+    const placeholderPath = `${folderName}/.keep`
+    const blankFile = new Blob([''], { type: 'text/plain' })
 
-    const matchingMonthDays = daysInMonth.filter(date => {
-      const isPast = isBefore(startOfDay(date), today) 
-      const isDay = format(date, 'EEEE') === targetFullName
-      const isNotBooked = !existingBookings.includes(format(date, 'yyyy-MM-dd'))
-      return !isPast && isDay && isNotBooked
-    })
+    const { error: storageError } = await supabase.storage
+      .from('classroom-files')
+      .upload(placeholderPath, blankFile, {
+        cacheControl: '3600',
+        upsert: true 
+      })
 
-    setSelectedDates(prev => {
-      const cleanedPrev = prev.filter(d => format(d, 'EEEE') !== targetFullName)
-      const combined = [...cleanedPrev, ...matchingMonthDays]
-      return combined.slice(0, maxLessons)
-    })
+    if (storageError) {
+      console.error(`❌ Bucket folder entry initialization failed:`, storageError.message)
+    }
   }
 
   const handleFinalize = async () => {
-    if (!selectedStudentId) return alert("Please select a student profile first.")
-    if (selectedDates.length === 0) return alert("Please select at least 1 lesson date.")
+    if (!studentId) return alert("System reference fault: Target student context lost.")
+    if (selectedDates.length === 0) return alert("Please select a trial lesson date on the grid calendar.")
     if (!selectedTimeSlot) return alert("Please choose a class timing window.")
+    if (!demoTopic.trim()) return alert("Please clarify what topic needs overview focus coverage during this demo session.")
+    if (!parentId) return alert("Context error: Parent identity is missing.")
     
     setSubmitting(true)
-    
-    const { data: { user } } = await supabase.auth.getUser()
-    if (!user) return alert("Authentication error. Please re-login.")
 
-    const insertionRows = selectedDates.map(date => ({
-      teacher_id: teacherId,
-      parent_id: user.id, 
-      student_id: selectedStudentId, // Dynamic pointer connecting backend row relations
-      booking_date: format(date, 'yyyy-MM-dd'),
-      time_slot: selectedTimeSlot,
+    // Building the structure layout row for state engine entry initialization
+    const entryPayload = {
+      teacher: teacherId,
+      parent: parentId, 
+      student: studentId, 
+      demo_booking_date: format(selectedDates[0], 'yyyy-MM-dd'),
+      demo_time_slot: selectedTimeSlot,
+      demo_topic: demoTopic.trim(),
       subject: subject,
-      status: 'confirmed'
-    }))
+      status: 'demo_pending' // Pipeline sequence initialized
+    }
 
-    const { error } = await supabase.from('bookings').insert(insertionRows)
+    const { error } = await supabase.from('bookings').insert([entryPayload])
 
     if (error) {
       alert("Booking Transaction Aborted: " + error.message)
     } else {
-      alert(`Success! Successfully booked ${selectedDates.length} lessons with ${teacherName}!`)
+      await initializeClassroomFolder(teacherId, studentId)
+      alert(`Success! Your trial demo class request for ${studentName} has been initialized inside the dashboard pipeline loop.`)
       onClose()
     }
     setSubmitting(false)
@@ -192,48 +209,46 @@ export default function BookingModal({
         
         <div className="flex justify-between items-center">
           <div>
-            <h3 className="text-xl font-black text-slate-900">Booking Setup</h3>
-            <p className="text-xs text-slate-400">Scheduling application for {teacherName}</p>
+            <h3 className="text-xl font-black text-slate-900">Book a Demo Class</h3>
+            <p className="text-xs text-slate-400">Schedule an introductory handshake evaluation with {teacherName}</p>
           </div>
           <button onClick={onClose} className="text-slate-400 hover:text-slate-600 font-bold text-xl">✕</button>
         </div>
 
-        {/* New Dynamic Choose Child Selector Section */}
-        <div className="flex flex-col gap-1.5 bg-blue-50/50 border border-blue-100 rounded-xl p-3.5">
-          <label className="text-xs font-black uppercase tracking-wider text-blue-600">Book Lesson For:</label>
+        <div className="bg-blue-50/70 border border-blue-100 rounded-xl p-3.5 flex items-center justify-between">
+          <span className="text-xs font-black uppercase tracking-wider text-blue-700">Student Prospect:</span>
+          <span className="text-sm font-black text-slate-800">🧒 {studentName}</span>
+        </div>
+
+        {/* INPUT: TIME WINDOW SELECTOR */}
+        <div className="flex flex-col gap-1.5 bg-slate-50 border border-slate-200 rounded-xl p-3">
+          <label className="text-xs font-black uppercase tracking-wider text-slate-500">1. Select Demo Session Time Window:</label>
           <select 
-            className="w-full p-2.5 border border-slate-200 bg-white font-semibold rounded-xl outline-none focus:ring-2 focus:ring-blue-500 text-sm cursor-pointer"
-            value={selectedStudentId}
-            onChange={e => setSelectedStudentId(e.target.value)}
+            className="w-full p-2.5 border border-slate-200 bg-white font-bold rounded-xl outline-none focus:ring-2 focus:ring-blue-500 text-sm cursor-pointer text-blue-600"
+            value={selectedTimeSlot}
+            onChange={e => setSelectedTimeSlot(e.target.value)}
           >
-            {students.length === 0 ? (
-              <option value="">No student profiles linked</option>
-            ) : (
-              students.map(student => (
-                <option key={student.id} value={student.id}>
-                  {student.name} {student.grade ? `(${student.grade})` : ''}
-                </option>
-              ))
-            )}
+            <option value="" className="text-slate-700">-- Choose timing window --</option>
+            {timeSlots?.map(slot => (
+              <option key={slot} value={slot} className="text-slate-700">{slot}</option>
+            ))}
           </select>
         </div>
 
-        <div className="bg-slate-50 border border-slate-200 rounded-xl p-3.5 flex items-center justify-between">
-          <label className="text-xs font-black uppercase tracking-wider text-slate-500">Number of Lessons Required:</label>
+        {/* INPUT: NEW TARGET DEMO TOPIC FOCUS FIELD */}
+        <div className="flex flex-col gap-1.5 bg-slate-50 border border-slate-200 rounded-xl p-3">
+          <label className="text-xs font-black uppercase tracking-wider text-slate-500">2. Target Evaluation Topic:</label>
           <input 
-            type="number" 
-            min="1" 
-            max="30"
-            className="w-16 p-1.5 border border-slate-200 bg-white rounded-lg text-center font-bold text-blue-600 focus:ring-2 focus:ring-blue-500 outline-none"
-            value={maxLessons}
-            onChange={e => {
-              const val = Number(e.target.value)
-              setMaxLessons(val)
-              if(selectedDates.length > val) setSelectedDates(prev => prev.slice(0, val))
-            }}
+            type="text"
+            required
+            placeholder="e.g., Intro to Fractions / Quadratic Equation Assessment"
+            value={demoTopic}
+            onChange={e => setDemoTopic(e.target.value)}
+            className="w-full p-2.5 border border-slate-200 bg-white text-xs font-medium rounded-xl outline-none focus:ring-2 focus:ring-blue-500 placeholder-slate-400 text-slate-800"
           />
         </div>
 
+        {/* CALENDAR CONTROLS SECTION */}
         <div className="flex justify-between items-center bg-white px-1">
           <button 
             type="button"
@@ -254,18 +269,12 @@ export default function BookingModal({
           </button>
         </div>
 
-        <div>
-          <div className="grid grid-cols-7 gap-1 text-center mb-1">
-            {weekDaysHeader.map((day, idx) => (
-              <button 
-                key={day}
-                type="button"
-                onClick={() => handleHeaderClick(idx)}
-                className="text-[11px] font-black uppercase text-slate-400 py-1.5 hover:bg-slate-100 rounded-md transition cursor-pointer"
-                title={`Click to auto-select all available ${day}s`}
-              >
+        <div className={!selectedTimeSlot ? "opacity-40 pointer-events-none" : ""}>
+          <div className="grid grid-cols-7 gap-1 text-center mb-1 border-b border-slate-100 pb-2">
+            {weekDaysHeader.map((day) => (
+              <span key={day} className="text-[11px] font-black uppercase text-slate-400 py-1">
                 {day}
-              </button>
+              </span>
             ))}
           </div>
 
@@ -287,32 +296,19 @@ export default function BookingModal({
           </div>
         </div>
 
-        <div className="flex flex-col gap-1.5">
-          <label className="text-xs font-black uppercase tracking-wider text-slate-400">Select Session Time Window:</label>
-          <select 
-            className="w-full p-3 border border-slate-200 bg-slate-50 font-medium rounded-xl outline-none focus:ring-2 focus:ring-blue-500 text-sm cursor-pointer"
-            value={selectedTimeSlot}
-            onChange={e => setSelectedTimeSlot(e.target.value)}
-          >
-            <option value="">-- Choose an operational hour slot --</option>
-            {timeSlots?.map(slot => (
-              <option key={slot} value={slot}>{slot}</option>
-            ))}
-          </select>
-        </div>
-
         <div className="pt-2 space-y-3">
           <div className="flex justify-between text-xs font-bold text-slate-500 px-1">
-            <span>Selected Count: <span className="text-red-500 font-black">{selectedDates.length}</span> / {maxLessons}</span>
-            <span>Total Cost: <span className="text-slate-900 font-black">${selectedDates.length * rate}</span></span>
+            <span>Selected Trial Slots: <span className="text-blue-600 font-black">{selectedDates.length} / 1</span></span>
+            <span>Trial Base Rate: <span className="text-slate-900 font-black">${rate}</span></span>
           </div>
 
           <button
+            type="button"
             onClick={handleFinalize}
-            disabled={submitting || students.length === 0}
-            className="w-full py-3.5 bg-blue-600 hover:bg-blue-700 disabled:bg-slate-300 text-white font-black text-base rounded-xl transition shadow-md shadow-blue-100"
+            disabled={submitting || selectedDates.length === 0 || !selectedTimeSlot || !demoTopic.trim()}
+            className="w-full py-3.5 bg-blue-600 hover:bg-blue-700 disabled:bg-slate-200 disabled:text-slate-400 text-white font-black text-base rounded-xl transition shadow-md"
           >
-            {submitting ? 'Committing Reservation Rows...' : `Finalize & Book (${selectedDates.length} Days)`}
+            {submitting ? 'Initializing State Machine Record...' : `Request Trial Class Entry`}
           </button>
         </div>
 

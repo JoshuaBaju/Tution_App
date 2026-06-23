@@ -1,0 +1,198 @@
+
+### 1. `demo_pending`
+
+* **What it means:** The entry point. A parent has requested a trial class, but the actual demo lesson has not been finished or marked completed yet.
+* **Component Context:** The user is still inside the live interactive dashboard or meeting room. Once the teacher concludes this workspace session, the system should update the row to `parent_approval_pending` and redirect them here.
+
+### 2. `parent_approval_pending`
+
+* **What it means:** The demo class is over. Now, **the ball is in the parent's court** to evaluate the experience and propose contract parameters.
+* **Component Visibility:** * **Parents** see **Phase 1** of the form (the Verdict buttons, package drop-downs, timeslot entry fields, and date matrices).
+* **Teachers** see a placeholder note stating: *"Waiting for the parent to submit their proposed schedule entries..."*
+
+
+
+### 3. `waiting_teacher_confirmation`
+
+* **What it means:** The parent completed the setup forms and clicked submit. **The ball is now in the teacher's court** to review the package request.
+* **Component Visibility:** * **Teachers** see **Phase 2** (an appraisal card showing requested topics, dates, and timeslots with options to either **Approve** or **Request Adjustments**).
+* **Parents** see a clean status message: *"Your proposed schedule and timeslots are currently under review by your assigned tutor."*
+
+
+
+### 4. `payment_pending`
+
+* **What it means:** The teacher checked their calendar, verified the schedule slots, and clicked *Approve*. **The ball moves back to the parent** to pay.
+* **Component Visibility:** * **Parents** see **Phase 3** (the Billing checkout gate layout with a payment simulation button).
+* **Teachers** see a structural block: *"Schedule approved! Waiting for parent to settle invoice calculations..."*
+
+
+
+### 5. `booked`
+
+* **What it means:** Checkout successful! The parent cleared the balance processing parameters. Now, **the teacher must map out the curriculum syllabus**.
+* **Component Visibility:**
+* **Teachers** see **Phase 4** (the dynamic database compilation grid to type individual subject lesson topics for every single selected date row).
+* **Parents** see a placeholder indicator: *"Payment verified! Your teacher is mapping out specific course subtopics..."*
+
+
+
+### 6. `active`
+
+* **What it means:** The ultimate end state. The teacher locked down the custom syllabus topics and generated individual entry parameters inside the core `sessions` table.
+* **Component Visibility:** Both roles lose all form access blocks and see the identical success panel: *"🚀 Course Is Active & Operational"*. The contract configuration engine closes.
+
+
+
+
+No i have few more eatures to add/
+
+1. A pre session page - it just verifes their vieo, adnaudio connection(in the live componnet) - it has an audio meter that hsows how much audio is created.. a preview of their vidoe..- just like in google meet - i also shows joining as - Mr Parkinson- Teacher
+
+2. In the meeting page too..they hsoudl be told if the other paryt(teacher/studnt has joined)
+
+like in ggle mee when someone jin..they hsould be announced and it shoudl beshown somehwere too..(also joined as should be shown)
+
+
+
+
+
+
+
+
+now we need to add feacture to this whiteboard..i have many of themm
+
+1. iwnat thsi layout..5 option at the bototm..a mini popup above each option that has more opton (sub options) of the botom options. They hsoul be able to these - cut,dopy paste,delet and allow the drag and drop of files..bpoth from outside and from the fildeivtory..- it shoudl be added as falten image on the whiteboard
+
+
+
+now the 5 option
+
+1. Select tool - the mouse icon - normal pointer - it shoudl allow the user to select any brush stroke, text,shape or etc..then they can move, copy,cut or delet that selection,alos as these are selcted gvie option to rotate, change size
+
+
+
+2. Move tool - pointer- hand pointer
+
+it should be able to move lft,right op or bootm on the whitebaor.. - i nee infinet canvas like the figma ans stuff - also allow zoom (show the zzom legel at eth right bootm
+
+3- brush tool
+
+these have sub options -
+
+1.pen
+
+2.marker
+
+3. higlter
+
+4.eraser
+
+all thes ehsould have thes eoption - change size (ndicate their px size) and change color - they shoudl do as the arre named...also add their won pointer accordinly
+
+
+
+4 - Laser tool - pointer - a higler dot
+
+it can be used to show the content or poitn to it..they can draw line but they diapper within 2s ecs after drawing..- blue higltied
+
+
+
+5 - shapes tool - reactangele( can be made a squaer using teh shfte hold), oval(cicle sing shft),triangle,line etc..
+
+
+
+
+
+please o through everytihin tell me if it possible 
+
+
+
+
+
+
+ABout it several thngs dong work..
+
+
+
+1. drag and drop doestn falltent the iamge onto the whitebaord..( iwant it such away it fits the current teh zoomed in layout
+
+2. There is a misalignment btw the cursor adn the pen/marker tip..like its offeset by a few centiemters.. - it alwasy changes when the whitebaord size is alered..
+
+3. I want differnt mous epointers for differnte tools - 
+
+select - normal mouse pointer (arrowhead)
+
+move - a hand icon -it is correct now
+
+pen, meaker,hihglighter - for now just abrush icon, or  pen icon afor all the.e(same)
+
+eraser - adn eraaser (cubioid shape)
+
+thelaseer - a glow dot
+
+the shapes..- what it is current now..a pus sign - it works
+
+4.The seletc button dont selct anything.. it has some eero while moving things - ## Error Type
+
+Runtime TypeError
+
+
+
+## Error Message
+
+Cannot read properties of null (reading 'x')
+
+
+
+
+
+    at <unknown> (app/meeting/components/Whiteboard.tsx:498:35)
+
+    at Array.map (<anonymous>:null:null)
+
+    at <unknown> (app/meeting/components/Whiteboard.tsx:493:32)
+
+    at Whiteboard (app/meeting/components/Whiteboard.tsx:59:43)
+
+    at ImmersiveClassroomPage (app/meeting/[id]/page.tsx:678:11)
+
+
+
+## Code Frame
+
+  496 |         
+
+  497 |         if (transformHandle === 'move') {
+
+> 498 |           return { ...el, x: init.x + dx, y: init.y + dy }
+
+      |                                   ^
+
+  499 |         }
+
+  500 |         
+
+  501 |         // Advanced Bounding Handles Transformation Mechanics
+
+
+
+Next.js version: 16.2.6 (Turbopack)
+
+also i dont want doubl click for selet just one click does.. it  - 
+
+5. for the selct opion - it woudl be greta to give two ption - object slector, and lazzo seletc to selct all object within the lasso?
+
+6. DOnt give cut, copy,deltet,paste in teh sub option of selct intead give it as agenar otpion at the top..
+
+7. Important thing - you issed out the text ool in whole - the suboptions hsould have the font size, font style, color
+
+8. instead of giving all the size and color at top giv eit as amini popup whne you click of pen/marker/highlighter
+
+9.the laser tool has some  kidn fo eerorr..it draws many lines when raing a cuverd line - also when the laser it clicker..the current position of the glowing dot pinter must be displayed to the studnet..(like a laser point)
+
+
+
+
+
+please do veting do notmssout evenone of the above..
