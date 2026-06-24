@@ -177,7 +177,6 @@ export default function ChatDashboard({
     ])
   }
 
-  // 🛠️ FIX: Added event suppression parameters and explicit state resolution
   async function handleEditSubmit(e?: React.MouseEvent | React.FormEvent) {
     if (e) {
       e.preventDefault()
@@ -229,9 +228,8 @@ export default function ChatDashboard({
     setSelectedMenuMessage(null)
   }
 
-  // 🛠️ FIX: Enhanced event handling to avoid target locking
   const handleTouchStart = (e: any, msg: any) => {
-    if (e.button && e.button !== 0) return // Only register primary clicks
+    if (e.button && e.button !== 0) return 
     const clientX = 'touches' in e ? e.touches[0].clientX : e.clientX
     const clientY = 'touches' in e ? e.touches[0].clientY : e.clientY
     
@@ -269,38 +267,48 @@ export default function ChatDashboard({
         <div className="flex-1 overflow-y-auto p-2 space-y-1 custom-scrollbar">
           {contacts.map((c) => {
             const isSelected = activeContact?.contact_id === c.contact_id
+            
+            const handleSelectContact = async () => {
+              if (c.existing_room_id) {
+                setActiveContact(c)
+                setActiveRoomId(c.existing_room_id)
+              } else {
+                const targetRoomId = await onInitializeRoom(c)
+                if (targetRoomId) {
+                  const updatedContact = { ...c, existing_room_id: targetRoomId }
+                  setActiveContact(updatedContact)
+                  setActiveRoomId(targetRoomId)
+                  onRefreshRoster()
+                }
+              }
+            }
+
             return (
               <div
                 key={c.contact_id}
-                onClick={() => {
-                  if (c.existing_room_id) {
-                    setActiveContact(c)
-                    setActiveRoomId(c.existing_room_id)
-                  }
-                }}
-                className={`p-3 rounded-xl transition flex items-center justify-between gap-3 ${c.existing_room_id ? 'cursor-pointer' : 'cursor-default'} ${isSelected ? 'bg-blue-600 text-white' : 'bg-white hover:bg-slate-100 border border-slate-100'}`}
+                onClick={handleSelectContact}
+                className={`p-3 rounded-xl transition flex items-center justify-between gap-3 cursor-pointer ${
+                  isSelected ? 'bg-blue-600 text-white' : 'bg-white hover:bg-slate-100 border border-slate-100'
+                }`}
               >
                 <div className="truncate flex-1">
                   <div className="flex items-center gap-2">
-                    <p className={`text-xs font-black truncate ${isSelected ? 'text-white' : 'text-slate-800'}`}>{c.contact_name}</p>
+                    <p className={`text-xs font-black truncate ${isSelected ? 'text-white' : 'text-slate-800'}`}>
+                      {c.contact_name}
+                    </p>
                     {(c.unread_count ?? 0) > 0 ? (
                       <span className="bg-red-500 text-white text-[9px] font-black px-1.5 py-0.5 rounded-full">{c.unread_count}</span>
                     ) : null}
                   </div>
-                  <span className={`text-[9px] font-black uppercase tracking-wider px-1.5 py-0.5 rounded mt-1 inline-block ${isSelected ? 'bg-blue-700 text-blue-200' : 'bg-slate-100 text-slate-500'}`}>{c.contact_type}</span>
+                  <span className={`text-[9px] font-black uppercase tracking-wider px-1.5 py-0.5 rounded mt-1 inline-block ${
+                    isSelected ? 'bg-blue-700 text-blue-200' : 'bg-slate-100 text-slate-500'
+                  }`}>
+                    {c.contact_type}
+                  </span>
                 </div>
                 {!c.existing_room_id && (
                   <button
                     type="button"
-                    onClick={async (e) => { 
-                      e.stopPropagation(); 
-                      const targetRoomId = await onInitializeRoom(c); 
-                      if (targetRoomId) { 
-                        c.existing_room_id = targetRoomId;
-                        setActiveContact(c); 
-                        setActiveRoomId(targetRoomId); 
-                      } 
-                    }}
                     className="bg-blue-600 hover:bg-blue-700 text-white font-bold text-[10px] px-2.5 py-1.5 rounded-lg shadow-sm shrink-0"
                   >
                     ✨ Start
@@ -339,7 +347,6 @@ export default function ChatDashboard({
                     onTouchStart={(e) => handleTouchStart(e, m)}
                     onTouchEnd={handleTouchEnd}
                   >
-                    {/* 🛠️ FIX: Removed select-none layout rules here to prevent browser focus hijacking */}
                     <div className={`max-w-[75%] p-3 rounded-2xl text-xs cursor-pointer ${isMe ? 'bg-blue-600 text-white rounded-tr-none' : 'bg-white border border-slate-200 text-slate-800 rounded-tl-none'}`}>
                       <p className="leading-relaxed break-words whitespace-pre-wrap selection:bg-blue-200">{m.message}</p>
                       <div className="flex items-center justify-end gap-1 mt-1 text-[8px] opacity-70">
@@ -379,7 +386,6 @@ export default function ChatDashboard({
       {/* EDIT MODAL DIALOG */}
       {isEditing && (
         <div className="absolute inset-0 bg-slate-900/40 z-[200] flex items-center justify-center p-4" onClick={() => setIsEditing(false)}>
-          {/* 🛠️ FIX: Added clear form tags wrapped with stopPropagation to keep the save button working */}
           <form 
             onSubmit={handleEditSubmit}
             className="bg-white rounded-2xl p-4 w-full max-w-md space-y-3 shadow-2xl" 

@@ -1,5 +1,5 @@
 "use client"
-import { useState, useEffect, Suspense } from 'react' // 👈 Added Suspense here
+import { useState, useEffect, Suspense, useCallback } from 'react'
 import { useSearchParams, useRouter } from 'next/navigation'
 import { supabase } from '@/lib/supabase'
 import Link from 'next/link'
@@ -17,7 +17,11 @@ import {
   parseISO
 } from 'date-fns'
 
-// 1. Rename your main logic component to a sub-component
+interface ConflictSession {
+  date: string
+  time: string
+}
+
 function UnifiedPostDemoContent() {
   const searchParams = useSearchParams()
   const router = useRouter()
@@ -31,9 +35,11 @@ function UnifiedPostDemoContent() {
 
   // Calendar Engine Local Component States
   const [currentMonth, setCurrentMonth] = useState(new Date()) 
-  const [existingBookings, setExistingBookings] = useState<string[]>([])
   const [teacherTimeSlots, setTeacherTimeSlots] = useState<string[]>([])
   const [teacherBaseDays, setTeacherBaseDays] = useState<string[]>([])
+  
+  // Master overlap arrays compiled from DB
+  const [busyScheduleSlots, setBusyScheduleSlots] = useState<ConflictSession[]>([])
 
   // Form Processing States (Parent Input States)
   const [isSatisfied, setIsSatisfied] = useState<boolean | null>(null)
@@ -54,86 +60,150 @@ function UnifiedPostDemoContent() {
   const weekDaysHeader = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat']
   const today = startOfDay(new Date()) 
 
+  // Core Data Fetch Function (Can be cleanly re-called by real-time stream updates)
+  const loadWorkflowContext = useCallback(async (uid: string) => {
+    if (!bookingId) {
+      setLoading(false)
+      return
+    }
+
+    // 1. Fetch main booking context
+    const { data, error } = await supabase
+      .from('bookings')
+      .select('*, parent, teacher')
+      .eq('id', bookingId)
+      .single()
+
+    if (error) {
+      console.error("Error downloading workflow context:", error.message)
+      setLoading(false)
+      return
+    }
+
+    if (data) {
+      setBooking(data)
+      
+      if (uid === data.parent) setUserRole('parent')
+      else if (uid === data.teacher) setUserRole('teacher')
+
+      if (data.proposed_topic) setProposedTopic(data.proposed_topic)
+      if (data.total_sessions) setTotalSessions(data.total_sessions || 10)
+      if (data.proposed_timeslot) setProposedTimeslot(data.proposed_timeslot)
+      
+      if (data.proposed_dates) {
+        const parsedDates = data.proposed_dates.map((dStr: string) => parseISO(dStr))
+        setSelectedDates(parsedDates)
+        
+        const initialTopics: { [key: string]: string } = {}
+        data.proposed_dates.forEach((dateStr: string) => {
+          initialTopics[dateStr] = ''
+        })
+        setSessionTopics(initialTopics)
+      }
+      if (data.is_satisfied !== null) setIsSatisfied(data.is_satisfied)
+
+      // 2. Fetch Assigned Teacher catalogs
+      const { data: teacherData } = await supabase
+        .from('teachers')
+        .select('time_slots, available_days')
+        .eq('id', data.teacher)
+        .single()
+
+      if (teacherData) {
+        setTeacherTimeSlots(teacherData.time_slots || [])
+        setTeacherBaseDays(teacherData.available_days || [])
+      }
+
+      // 3. COMPILE TEACHER CONFLICTS (Both active bookings and generated sessions)
+      const parsedConflicts: ConflictSession[] = []
+
+      // Query A: Conflict dates from bookings table
+      const { data: conflictingBookings } = await supabase
+        .from('bookings')
+        .select('proposed_dates, proposed_timeslot')
+        .eq('teacher', data.teacher)
+        .neq('id', bookingId) // Ignore current record mapping
+        .in('status', ['waiting_teacher_confirmation', 'payment_pending', 'booked', 'active'])
+
+      conflictingBookings?.forEach(b => {
+        if (b.proposed_dates && b.proposed_timeslot) {
+          b.proposed_dates.forEach((dStr: string) => {
+            parsedConflicts.push({ date: dStr, time: b.proposed_timeslot })
+          })
+        }
+      })
+
+      // Query B: Conflict slots from structural running live sessions table
+      const { data: conflictingSessions } = await supabase
+        .from('sessions')
+        .select('session_date, session_time, bookings!inner(teacher)')
+        .eq('bookings.teacher', data.teacher)
+        .neq('booking_id', bookingId)
+
+      conflictingSessions?.forEach((s: any) => {
+        if (s.session_date && s.session_time) {
+          parsedConflicts.push({ date: s.session_date, time: s.session_time })
+        }
+      })
+
+      setBusyScheduleSlots(parsedConflicts)
+    }
+    setLoading(false)
+  }, [bookingId])
+
+  // Initial Auth hook & Real-Time Sync Channel Initialization
   useEffect(() => {
-    async function initializeWorkflow() {
+    let activeUser: string | null = null
+
+    async function setupWorkflow() {
       const { data: { session } } = await supabase.auth.getSession()
       if (!session) {
         router.push('/login')
         return
       }
-      const currentUid = session.user.id
-      setUserId(currentUid)
-
-      if (!bookingId) {
-        setLoading(false)
-        return
-      }
-
-      // Fetch master booking record context
-      const { data, error } = await supabase
-        .from('bookings')
-        .select('*, parent, teacher')
-        .eq('id', bookingId)
-        .single()
-
-      if (error) {
-        console.error("Error downloading workflow context:", error.message)
-      } else if (data) {
-        setBooking(data)
-        
-        if (currentUid === data.parent) setUserRole('parent')
-        else if (currentUid === data.teacher) setUserRole('teacher')
-
-        if (data.proposed_topic) setProposedTopic(data.proposed_topic)
-        if (data.total_sessions) setTotalSessions(data.total_sessions || 10)
-        if (data.proposed_timeslot) setProposedTimeslot(data.proposed_timeslot)
-        
-        if (data.proposed_dates) {
-          const parsedDates = data.proposed_dates.map((dStr: string) => parseISO(dStr))
-          setSelectedDates(parsedDates)
-          
-          const initialTopics: { [key: string]: string } = {}
-          data.proposed_dates.forEach((dateStr: string) => {
-            initialTopics[dateStr] = ''
-          })
-          setSessionTopics(initialTopics)
-        }
-        if (data.is_satisfied !== null) setIsSatisfied(data.is_satisfied)
-
-        // Fetch the assigned teacher's details (timeslots and available days)
-        const { data: teacherData } = await supabase
-          .from('teachers')
-          .select('time_slots, available_days')
-          .eq('id', data.teacher)
-          .single()
-
-        if (teacherData) {
-          setTeacherTimeSlots(teacherData.time_slots || [])
-          setTeacherBaseDays(teacherData.available_days || [])
-        }
-
-        // Fetch conflicts / already confirmed bookings for this specific teacher
-        const { data: bookedData } = await supabase
-          .from('bookings')
-          .select('proposed_dates')
-          .eq('teacher_id', data.teacher)
-          .eq('status', 'active')
-
-        if (bookedData) {
-          const flattening = bookedData.flatMap(b => b.proposed_dates || [])
-          setExistingBookings(flattening)
-        }
-      }
-      setLoading(false)
+      activeUser = session.user.id
+      setUserId(activeUser)
+      await loadWorkflowContext(activeUser)
     }
-    initializeWorkflow()
-  }, [bookingId, router])
 
-  // --- INTERACTIVE CALENDAR UTILITIES ---
+    setupWorkflow()
+
+    // Realtime channel stream configuration mapping updates dynamically
+    const channel = supabase
+      .channel(`booking-sync-${bookingId}`)
+      .on(
+        'postgres_changes',
+        { event: '*', filter: `id=eq.${bookingId}`, schema: 'public', table: 'bookings' },
+        () => {
+          if (activeUser) loadWorkflowContext(activeUser)
+        }
+      )
+      .subscribe()
+
+    return () => {
+      supabase.removeChannel(channel)
+    }
+  }, [bookingId, router, loadWorkflowContext])
+
+  // Clear dates safely if parent alters selected operational hours setup
+  const handleTimeslotChange = (newSlot: string) => {
+    setProposedTimeslot(newSlot)
+    setSelectedDates([])
+  }
+
+  // --- INTERACTIVE CALENDAR UTILITIES WITH TIMING GUARD OVERLAPS ---
   const monthStart = startOfMonth(currentMonth)
   const monthEnd = endOfMonth(currentMonth)
   const daysInMonth = eachDayOfInterval({ start: monthStart, end: monthEnd })
   const startOffset = getDay(monthStart) 
+
+  // Central validation tracking utility checking if a date has an active teacher block
+  const isTimeSlotOverlapping = (dateString: string) => {
+    if (!proposedTimeslot) return false
+    return busyScheduleSlots.some(
+      slot => slot.date === dateString && slot.time === proposedTimeslot
+    )
+  }
 
   const getDateStatus = (date: Date) => {
     const dateString = format(date, 'yyyy-MM-dd')
@@ -145,8 +215,8 @@ function UnifiedPostDemoContent() {
     if (selectedDates.some(d => isSameDay(d, date))) {
       return 'bg-blue-600 text-white font-black scale-95 shadow-sm'
     }
-    if (existingBookings.includes(dateString)) {
-      return 'bg-slate-200 text-slate-400 line-through cursor-not-allowed'
+    if (isTimeSlotOverlapping(dateString)) {
+      return 'bg-rose-100/70 border border-rose-200 text-rose-400 line-through cursor-not-allowed'
     }
     if (teacherBaseDays.includes(dayName)) {
       return 'bg-blue-50 text-blue-600 border border-blue-100 hover:bg-blue-500 hover:text-white cursor-pointer font-bold'
@@ -159,7 +229,7 @@ function UnifiedPostDemoContent() {
 
     const dayName = format(date, 'EEEE')
     const dateString = format(date, 'yyyy-MM-dd')
-    if (!teacherBaseDays.includes(dayName) || existingBookings.includes(dateString)) return
+    if (!teacherBaseDays.includes(dayName) || isTimeSlotOverlapping(dateString)) return
 
     if (selectedDates.some(d => isSameDay(d, date))) {
       setSelectedDates(prev => prev.filter(d => !isSameDay(d, date)))
@@ -173,6 +243,11 @@ function UnifiedPostDemoContent() {
   }
 
   const handleHeaderClick = (dayIndex: number) => {
+    if (!proposedTimeslot) {
+      alert("Please configure your layout preferred time slot before using automatic column assignment.")
+      return
+    }
+
     const targetDayName = weekDaysHeader[dayIndex] 
     const fullDayNames: Record<string, string> = { 'Mon': 'Monday', 'Tue': 'Tuesday', 'Wed': 'Wednesday', 'Thu': 'Thursday', 'Fri': 'Friday', 'Sat': 'Saturday', 'Sun': 'Sunday' }
     const targetFullName = fullDayNames[targetDayName]
@@ -180,8 +255,8 @@ function UnifiedPostDemoContent() {
     const matchingMonthDays = daysInMonth.filter(date => {
       const isPast = isBefore(startOfDay(date), today) 
       const isDay = format(date, 'EEEE') === targetFullName
-      const isNotBooked = !existingBookings.includes(format(date, 'yyyy-MM-dd'))
-      return !isPast && isDay && isNotBooked
+      const isNotConflict = !isTimeSlotOverlapping(format(date, 'yyyy-MM-dd'))
+      return !isPast && isDay && isNotConflict
     })
 
     setSelectedDates(prev => {
@@ -191,12 +266,13 @@ function UnifiedPostDemoContent() {
     })
   }
 
+  // Transaction submission handlers (Automatic local reloading is removed as Realtime triggers update)
   const handleParentSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
     if (isSatisfied === false || wishToContinue === false) {
       setSubmitting(true)
       await supabase.from('bookings').update({ status: 'cancelled', is_satisfied: isSatisfied }).eq('id', bookingId)
-      window.location.reload()
+      setSubmitting(false)
       return
     }
 
@@ -220,8 +296,8 @@ function UnifiedPostDemoContent() {
       })
       .eq('id', bookingId)
 
+    setSubmitting(false)
     if (error) alert(error.message)
-    else window.location.reload()
   }
 
   const handleTeacherApprove = async () => {
@@ -231,8 +307,8 @@ function UnifiedPostDemoContent() {
       .update({ status: 'payment_pending', confirmed_at: new Date() })
       .eq('id', bookingId)
 
+    setSubmitting(false)
     if (error) alert(error.message)
-    else window.location.reload()
   }
 
   const handleTeacherRequestChange = async () => {
@@ -246,8 +322,8 @@ function UnifiedPostDemoContent() {
       .update({ status: 'parent_approval_pending', teacher_notes: changeComment.trim() })
       .eq('id', bookingId)
 
+    setSubmitting(false)
     if (error) alert(error.message)
-    else window.location.reload()
   }
 
   const handleSimulatePayment = async () => {
@@ -257,8 +333,8 @@ function UnifiedPostDemoContent() {
       .update({ status: 'booked', paid_at: new Date() })
       .eq('id', bookingId)
 
+    setSubmitting(false)
     if (error) alert(error.message)
-    else window.location.reload()
   }
 
   const handleGenerateSessions = async (e: React.FormEvent) => {
@@ -292,7 +368,6 @@ function UnifiedPostDemoContent() {
     setSubmitting(false)
 
     if (bookingError) alert(`Configuration error: ${bookingError.message}`)
-    else window.location.reload()
   }
 
   if (loading) return <div className="p-12 text-center text-xs font-bold text-slate-400 animate-pulse tracking-widest">SYNCHRONIZING RECURRING LIFECYCLE INTERFACE...</div>
@@ -374,7 +449,7 @@ function UnifiedPostDemoContent() {
                   required
                   className="w-full p-2.5 border border-slate-200 bg-slate-50 font-semibold rounded-xl text-xs"
                   value={proposedTimeslot}
-                  onChange={e => setProposedTimeslot(e.target.value)}
+                  onChange={e => handleTimeslotChange(e.target.value)}
                 >
                   <option value="">-- Choose an operational hour slot from the tutor's catalog --</option>
                   {teacherTimeSlots.map(slot => (
@@ -389,6 +464,10 @@ function UnifiedPostDemoContent() {
                   <label className="block text-xs font-black uppercase tracking-wider text-slate-700">6. Choose Your {totalSessions} Course Calendar Dates</label>
                   <span className="text-xs font-mono font-bold text-blue-600 bg-blue-100/70 px-2 py-0.5 rounded">Selected: {selectedDates.length}/{totalSessions}</span>
                 </div>
+
+                {!proposedTimeslot && (
+                  <p className="text-[11px] text-amber-600 font-bold text-center bg-amber-50 border border-amber-200 rounded-lg p-2">⚠️ Please select a timeslot first to evaluate teacher calendar availability matrices.</p>
+                )}
 
                 <div className="flex justify-between items-center bg-white p-2 rounded-xl border border-slate-100">
                   <button type="button" onClick={() => setCurrentMonth(prev => subMonths(prev, 1))} className="p-1.5 text-[11px] font-bold text-slate-600 bg-slate-50 hover:bg-slate-100 rounded-md">← Prev</button>
@@ -424,6 +503,12 @@ function UnifiedPostDemoContent() {
                       </button>
                     ))}
                   </div>
+                </div>
+                
+                <div className="flex gap-4 justify-center items-center text-[10px] font-bold pt-1 text-slate-400">
+                  <div className="flex items-center gap-1"><span className="w-2.5 h-2.5 rounded bg-blue-50 border border-blue-100 block"/> Available</div>
+                  <div className="flex items-center gap-1"><span className="w-2.5 h-2.5 rounded bg-blue-600 block"/> Selected</div>
+                  <div className="flex items-center gap-1"><span className="w-2.5 h-2.5 rounded bg-rose-100 block"/> Overlap Conflict</div>
                 </div>
               </div>
             </div>
@@ -564,7 +649,6 @@ function UnifiedPostDemoContent() {
   )
 }
 
-// 2. EXPORT A DEFAULT WRAPPER ROOT WRAPPED IN A SUSPENSE CONTAINER 
 export default function UnifiedPostDemoWorkflow() {
   return (
     <Suspense fallback={<div className="p-12 text-center text-xs font-bold text-slate-400 animate-pulse tracking-widest">LOADING CONTENT CONTAINER STAGE...</div>}>
