@@ -31,7 +31,7 @@ export default function ParentChatRoom({ parentId }: ParentChatRoomProps) {
           teachers:teacher (id, name)
         `)
         .eq('parent', parentId)
-        .eq('status', 'confirmed')
+        .eq('status', 'active')
 
       if (bookingError) throw bookingError
 

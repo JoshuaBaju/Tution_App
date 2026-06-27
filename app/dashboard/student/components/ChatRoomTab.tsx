@@ -14,17 +14,17 @@ interface ChatRoomTabProps {
 export default function ChatRoomTab({ studentId }: ChatRoomTabProps) {
   const [contacts, setContacts] = useState<ChatContact[]>([])
   const [loading, setLoading] = useState(true)
-  const [authUserId, setAuthUserId] = useState<string | null>(null) // 💡 Track real Auth ID
+  const [authUserId, setAuthUserId] = useState<string | null>(null)
 
   async function loadStudentRoster() {
     try {
-      // 1. Get the actual authenticated user ID to fix the message direction bug
+      setLoading(true)
+
       const { data: { session } } = await supabase.auth.getSession()
       if (session?.user?.id) {
         setAuthUserId(session.user.id)
       }
 
-      // 2. Pull teachers where a booking exists for this specific student profile and is confirmed
       const { data: bookings, error: bookingError } = await supabase
         .from('bookings')
         .select(`
@@ -32,11 +32,10 @@ export default function ChatRoomTab({ studentId }: ChatRoomTabProps) {
           teachers:teacher (id, name)
         `)
         .eq('student', studentId)
-        .eq('status', 'confirmed')
+        .eq('status', 'active')
 
       if (bookingError) throw bookingError
 
-      // Deduplicate course instructors into our contact map structures
       const uniqueContactsMap = new Map<string, ChatContact>()
       bookings?.forEach((item: any) => {
         if (item.teachers && !uniqueContactsMap.has(item.teacher)) {
@@ -56,7 +55,6 @@ export default function ChatRoomTab({ studentId }: ChatRoomTabProps) {
         return
       }
 
-      // 3. Query chat spaces existing for these teachers linked to this student
       const { data: rooms, error: roomError } = await supabase
         .from('chat_rooms')
         .select('id, teacher_id')
@@ -74,13 +72,12 @@ export default function ChatRoomTab({ studentId }: ChatRoomTabProps) {
         }
       })
 
-      // 4. Query live incoming unread tallies using the true Auth ID
       if (activeRoomIds.length > 0 && session?.user?.id) {
         const { data: unreadCounts, error: unreadError } = await supabase
           .from('chat_messages')
           .select('room_id')
           .is('read_at', null)
-          .neq('sender_id', session.user.id) // 💡 Compare against real auth UID
+          .neq('sender_id', session.user.id)
           .in('room_id', activeRoomIds)
 
         if (!unreadError && unreadCounts) {
@@ -107,7 +104,6 @@ export default function ChatRoomTab({ studentId }: ChatRoomTabProps) {
     if (studentId) loadStudentRoster()
   }, [studentId])
 
-  // Allows a student to construct a fresh row line if their parent hasn't created one yet
   async function handleInitializeRoom(contact: ChatContact): Promise<string | null> {
     try {
       const { data, error } = await supabase
@@ -131,7 +127,6 @@ export default function ChatRoomTab({ studentId }: ChatRoomTabProps) {
     }
   }
 
-  // Guard clause to prevent loading the dashboard before the Auth ID resolves
   if (!authUserId) {
     return (
       <div className="flex items-center justify-center py-20">
@@ -152,7 +147,7 @@ export default function ChatRoomTab({ studentId }: ChatRoomTabProps) {
       </div>
 
       <ChatDashboard
-        currentUserId={authUserId} // 🚀 PASSING THE REAL AUTH ID HERE
+        currentUserId={authUserId}
         currentUserRole="student"
         contacts={contacts}
         loadingContacts={loading}

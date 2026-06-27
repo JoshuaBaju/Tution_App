@@ -28,7 +28,7 @@ export default function ChatRoomTab({ teacherId }: ChatRoomTabProps) {
           parents:parent (id, name)
         `)
         .eq('teacher', teacherId)
-        .eq('status', 'confirmed')
+        .eq('status', 'active')
 
       if (parentError) throw parentError
 
@@ -52,7 +52,7 @@ export default function ChatRoomTab({ teacherId }: ChatRoomTabProps) {
           students:student (id, name)
         `)
         .eq('teacher', teacherId)
-        .eq('status', 'confirmed')
+        .eq('status', 'active')
 
       if (studentError) throw studentError
 

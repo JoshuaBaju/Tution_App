@@ -31,7 +31,7 @@ export default function ImmersiveClassroomPage() {
   const analyserRef = useRef<AnalyserNode | null>(null)
   const animationFrameRef = useRef<number | null>(null)
 
-  // Feature 2: Presence States (Google Meet style announcements)
+  // Feature 2: Presence States
   const [otherPartyJoined, setOtherPartyJoined] = useState<boolean>(false)
   const [announcement, setAnnouncement] = useState<string | null>(null)
   
@@ -41,9 +41,9 @@ export default function ImmersiveClassroomPage() {
   const [userRole, setUserRole] = useState<'teacher' | 'student' | 'parent' | null>(null)
   const [chatRoomId, setChatRoomId] = useState<string | null>(null)
   
-  // UI Layout Framework States (Single Left Sidebar Engine)
-  const [isCommunicationOpen, setIsCommunicationOpen] = useState(true) // Top Half Control
-  const [isChannelsOpen, setIsChannelsOpen] = useState(true)           // Bottom Half Control
+  // UI Layout Framework States
+  const [isCommunicationOpen, setIsCommunicationOpen] = useState(true)
+  const [isChannelsOpen, setIsChannelsOpen] = useState(true)          
   const [activeTab, setActiveTab] = useState<'chat' | 'locker'>('chat')
   const [sidebarWidth, setSidebarWidth] = useState(320)
   const [avHeight, setAvHeight] = useState(176)
@@ -165,24 +165,9 @@ export default function ImmersiveClassroomPage() {
           } catch (e) {
             console.warn("Profiles look up skipped.")
           }
-
-          let matchedRoomId = '01943cde-aa1c-459b-8c5a-9a7c6d3e157f'
-          const { data: teacherRoom } = await supabase.from('chat_rooms').select('id').eq('teacher_id', user.id).maybeSingle()
-          if (teacherRoom) {
-            matchedRoomId = teacherRoom.id
-            currentResolvedRole = 'teacher'
-            setUserRole('teacher')
-          } else {
-            const { data: studentRoom } = await supabase.from('chat_rooms').select('id').eq('student_id', user.id).maybeSingle()
-            if (studentRoom) {
-              matchedRoomId = studentRoom.id
-              currentResolvedRole = 'student'
-              setUserRole('student')
-            }
-          }
-          setChatRoomId(matchedRoomId)
         }
 
+        // Fetch target booking session info first to get accurate metadata context
         const { data: session } = await supabase
           .from('sessions')
           .select(`id, booking_id, topic, bookings ( teacher, student, parent, subject )`)
@@ -244,6 +229,33 @@ export default function ImmersiveClassroomPage() {
               currentResolvedRole = 'student'
               setUserRole('student')
               setOtherPartyName(resolvedTeacherName)
+            }
+
+            // 🔑 RESOLVE REAL ROOM ID: Look up based on the actual structural session pairing
+            const { data: realRoom } = await supabase
+              .from('chat_rooms')
+              .select('id')
+              .eq('teacher_id', targetBooking.teacher)
+              .eq('student_id', targetBooking.student)
+              .maybeSingle()
+
+            if (realRoom?.id) {
+              setChatRoomId(realRoom.id)
+            } else {
+              // Create room safely if it hasn't been instantiated yet
+              const { data: newRoom } = await supabase
+                .from('chat_rooms')
+                .insert([
+                  {
+                    teacher_id: targetBooking.teacher,
+                    student_id: targetBooking.student,
+                    parent_id: targetBooking.parent || null
+                  }
+                ])
+                .select('id')
+                .single()
+              
+              if (newRoom?.id) setChatRoomId(newRoom.id)
             }
           }
 
@@ -484,7 +496,6 @@ export default function ImmersiveClassroomPage() {
 
       <header className="h-14 bg-white border-b border-slate-200/80 px-4 flex items-center justify-between shrink-0 z-30 shadow-xs relative">
         <div className="flex items-center gap-3">
-          {/* Header Controls linked back directly to main left sub-panel toggles */}
           <button 
             type="button"
             onClick={() => setIsCommunicationOpen(!isCommunicationOpen)}
@@ -537,14 +548,12 @@ export default function ImmersiveClassroomPage() {
 
       <div id="workspace-core" className="flex-1 flex w-full relative overflow-hidden">
         
-        {/* ========================================================= */}
-        {/* SINGLE INTEGRATED LEFT SIDEBAR MODULE                     */}
-        {/* ========================================================= */}
+        {/* SIDEBAR MODULE */}
         <div 
           style={{ width: isAnyLeftPanelOpen ? `${48 + sidebarWidth}px` : '48px' }}
           className="h-full flex shrink-0 bg-white border-r border-slate-200 z-20 relative select-none transition-[width] duration-200 ease-in-out"
         >
-          {/* STRIP PANEL PANEL CONTROLS */}
+          {/* STRIP CONTROLS */}
           <div className="w-12 h-full bg-slate-50 border-r border-slate-150 flex flex-col items-center py-3 justify-between shrink-0">
             <div className="flex flex-col gap-2 w-full px-1.5">
               <button
@@ -601,7 +610,6 @@ export default function ImmersiveClassroomPage() {
           {/* MASTER SUBPANEL INJECTION AREA */}
           <div className="flex-1 h-full flex flex-col overflow-hidden">
             
-            {/* TOP COMPONENT: Chat / Document Locker Tab Layout */}
             {isCommunicationOpen && (
               <div className="flex-1 flex flex-col p-3 overflow-hidden min-h-0 relative">
                 <button 
@@ -619,7 +627,14 @@ export default function ImmersiveClassroomPage() {
                 </div>
                 <div className="flex-1 overflow-y-auto min-h-0 flex flex-col">
                   {activeTab === 'chat' ? (
-                    <ChatRooms roomId={chatRoomId || cleanId} currentUserId={currentUserId || undefined} senderRole={userRole || "student"} />
+                    /* 🚀 Safe Real-Time Room Injection */
+                    chatRoomId ? (
+                      <ChatRooms roomId={chatRoomId} currentUserId={currentUserId || undefined} senderRole={userRole || "student"} />
+                    ) : (
+                      <div className="flex-1 flex items-center justify-center text-xs text-slate-400 font-medium">
+                        Syncing secure room pipeline...
+                      </div>
+                    )
                   ) : (
                     <FileDirectory folderPath={folderPath} />
                   )}
@@ -627,12 +642,10 @@ export default function ImmersiveClassroomPage() {
               </div>
             )}
 
-            {/* SPLIT HINGE RESIZER BAR */}
             {isCommunicationOpen && isChannelsOpen && (
               <div onMouseDown={startAvResize} className="h-1 bg-slate-200 hover:bg-blue-400 cursor-ns-resize transition-all shrink-0 z-30" />
             )}
 
-            {/* BOTTOM COMPONENT: Integrated Live Video Channels Workspace */}
             {isChannelsOpen && (
               <div 
                 style={{ height: isCommunicationOpen ? `${avHeight}px` : '100%' }} 
@@ -668,19 +681,16 @@ export default function ImmersiveClassroomPage() {
           </div>
         </div>
 
-        {/* Dynamic Resizer Line Trigger */}
         {isAnyLeftPanelOpen && <div onMouseDown={startSidebarResize} className="w-1 bg-slate-200 hover:bg-blue-500 cursor-ew-resize transition-all shrink-0 z-30 layout-resizer" />}
 
-        {/* ========================================================= */}
-        {/* WORKSPACE CENTRAL WHITEBOARD DASHBOARD CANVAS             */}
-        {/* ========================================================= */}
+        {/* CENTRAL WHITEBOARD CANVAS */}
         <main className="flex-1 h-full relative z-10 bg-slate-50 min-w-0">
           <Whiteboard roomId={cleanId} folderPath={folderPath} />
         </main>
 
       </div>
 
-      {/* SUMMARY LOG SUBMISSION FORM MODAL */}
+      {/* EVALUATION MODAL */}
       {showSummaryModal && (
         <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-xs z-50 flex items-center justify-center p-4">
           <div className="bg-white border border-slate-200 w-full max-w-md rounded-3xl p-6 shadow-xl space-y-5">
