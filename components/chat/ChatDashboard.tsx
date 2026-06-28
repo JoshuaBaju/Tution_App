@@ -3,6 +3,7 @@
 import { useState, useEffect, useRef } from 'react'
 import { supabase } from '@/lib/supabase'
 import { Contact, Message } from '../../lib/types'
+import { sendNotification } from '@/lib/notifications'
 
 // Intersect the basic custom Message type with database schema properties for absolute safety
 type ExtendedMessage = Message & {
@@ -50,7 +51,7 @@ export default function ChatDashboard({
     setMessages([])
   }
 
-  // Optimized Database Read Receipt execution + immediate UI feedback
+  // Optimized Database Read Receipt execution + immediate UI feedback & notification clearance
   async function markMessagesAsRead(roomId: string) {
     if (!roomId || !currentUserId) return
 
@@ -72,6 +73,14 @@ export default function ChatDashboard({
         )
       )
       onRefreshRoster()
+
+      // Clear any unread notifications matching this specific chat room channel structure
+      await supabase
+        .from('notifications')
+        .update({ is_read: true })
+        .eq('user_id', currentUserId)
+        .eq('category', 'chat')
+        .like('link_to', `%room=${roomId}%`)
     } else {
       console.error("Database rejected read_at timestamp configuration:", error)
     }
@@ -167,14 +176,34 @@ export default function ChatDashboard({
 
   async function handleSendMessage(e: React.FormEvent) {
     e.preventDefault()
-    if (!newMessage.trim() || !activeRoomId) return
+    if (!newMessage.trim() || !activeRoomId || !activeContact) return
+    
     const text = newMessage
     const targetRoom: string = activeRoomId
+    const recipientId = activeContact.contact_id
     setNewMessage('')
 
-    await supabase.from('chat_messages').insert([
-      { room_id: targetRoom, sender_id: currentUserId, sender_role: currentUserRole, message: text.trim() }
-    ])
+    // 1. Submit the message row to the database
+    const { data: insertedMsg, error } = await supabase
+      .from('chat_messages')
+      .insert([
+        { room_id: targetRoom, sender_id: currentUserId, sender_role: currentUserRole, message: text.trim() }
+      ])
+      .select()
+      .single()
+
+    // 2. Dispatch a notification with a clean one-line context preview snippet to the recipient
+    if (!error && insertedMsg) {
+      const previewText = text.length > 60 ? `${text.slice(0, 60)}...` : text
+      
+      await sendNotification({
+        userId: recipientId,
+        title: `💬 New message from ${activeContact.contact_name || 'User'}`,
+        description: previewText,
+        category: 'chat',
+        linkTo: `/dashboard/chat?room=${targetRoom}&msg=${insertedMsg.id}`
+      })
+    }
   }
 
   async function handleEditSubmit(e?: React.MouseEvent | React.FormEvent) {

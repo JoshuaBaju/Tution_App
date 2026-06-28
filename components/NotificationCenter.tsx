@@ -1,7 +1,7 @@
-// components/NotificationCenter.tsx
 "use client"
 import { useState, useEffect, useRef } from 'react'
 import { supabase } from '@/lib/supabase'
+import Link from 'next/link'
 
 interface Notification {
   id: string
@@ -22,7 +22,6 @@ export default function NotificationCenter({ userId }: { userId: string }) {
   useEffect(() => {
     if (!userId) return
 
-    // 1. Initial Load of recent alerts
     async function loadNotifications() {
       const { data, error } = await supabase
         .from('notifications')
@@ -41,7 +40,6 @@ export default function NotificationCenter({ userId }: { userId: string }) {
 
     loadNotifications()
 
-    // 2. Real-Time Listener Setup
     const channel = supabase
       .channel(`user-alerts-${userId}`)
       .on(
@@ -60,7 +58,6 @@ export default function NotificationCenter({ userId }: { userId: string }) {
       )
       .subscribe()
 
-    // 3. Dropdown Escape Handler
     function handleClickOutside(event: MouseEvent) {
       if (dropdownRef.current && !dropdownRef.current.contains(event.target as Node)) {
         setIsOpen(false)
@@ -147,22 +144,51 @@ export default function NotificationCenter({ userId }: { userId: string }) {
             {notifications.length === 0 ? (
               <p className="text-xs text-slate-400 text-center py-6 italic">Your feed is clear.</p>
             ) : (
-              notifications.map((n) => (
-                <div 
-                  key={n.id} 
-                  onClick={() => !n.is_read && markAsRead(n.id)}
-                  className={`p-2.5 rounded-xl border text-left transition flex gap-2 items-start ${
-                    n.is_read ? 'bg-slate-50/50 border-slate-100 opacity-75' : 'bg-blue-50/20 border-blue-100 hover:bg-blue-50/40 cursor-pointer'
-                  }`}
-                >
-                  <span className="text-xs mt-0.5">{getCategoryEmoji(n.category)}</span>
-                  <div className="space-y-0.5 min-w-0 flex-1">
-                    <p className={`text-xs text-slate-800 truncate ${!n.is_read ? 'font-bold' : 'font-medium'}`}>{n.title}</p>
-                    <p className="text-[11px] text-slate-500 line-clamp-2">{n.description}</p>
+              notifications.map((n) => {
+                const itemClasses = `p-2.5 rounded-xl border text-left transition flex gap-2 items-start w-full ${
+                  n.is_read ? 'bg-slate-50/50 border-slate-100 opacity-75' : 'bg-blue-50/20 border-blue-100 hover:bg-blue-50/40 cursor-pointer'
+                }`
+
+                const innerContent = (
+                  <>
+                    <span className="text-xs mt-0.5">{getCategoryEmoji(n.category)}</span>
+                    <div className="space-y-0.5 min-w-0 flex-1">
+                      <p className={`text-xs text-slate-800 truncate ${!n.is_read ? 'font-bold' : 'font-medium'}`}>{n.title}</p>
+                      {/* Changed to line-clamp-1 to strictly enforce a one-line notification preview text block */}
+                      <p className="text-[11px] text-slate-500 line-clamp-1">{n.description}</p>
+                    </div>
+                    {!n.is_read && <span className="w-1.5 h-1.5 rounded-full bg-blue-600 shrink-0 mt-1.5" />}
+                  </>
+                )
+
+                // If a redirect path is present, wrap inside a native app Route Link
+                if (n.link_to) {
+                  return (
+                    <Link 
+                      key={n.id} 
+                      href={n.link_to}
+                      onClick={async () => {
+                        if (!n.is_read) await markAsRead(n.id)
+                        setIsOpen(false) // Close modal popover container
+                      }}
+                      className={`${itemClasses} block`}
+                    >
+                      {innerContent}
+                    </Link>
+                  )
+                }
+
+                // Fallback static action container item if no navigation path link is attached
+                return (
+                  <div 
+                    key={n.id} 
+                    onClick={() => !n.is_read && markAsRead(n.id)}
+                    className={itemClasses}
+                  >
+                    {innerContent}
                   </div>
-                  {!n.is_read && <span className="w-1.5 h-1.5 rounded-full bg-blue-600 shrink-0 mt-1.5" />}
-                </div>
-              ))
+                )
+              })
             )}
           </div>
         </div>

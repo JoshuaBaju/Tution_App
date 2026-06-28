@@ -115,6 +115,7 @@ function UnifiedPostDemoContent() {
         .select('proposed_dates, proposed_timeslot')
         .eq('teacher', data.teacher)
         .neq('id', bookingId)
+        .neq('status', 'cancelled')
         .in('status', ['waiting_teacher_confirmation', 'payment_pending', 'booked', 'active'])
 
       conflictingBookings?.forEach(b => {
