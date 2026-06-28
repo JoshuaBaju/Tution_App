@@ -26,19 +26,13 @@ function UnifiedPostDemoContent() {
   const searchParams = useSearchParams()
   const router = useRouter()
   const bookingId = searchParams.get('booking')
-
-  // Auth & Database States
   const [userId, setUserId] = useState<string | null>(null)
   const [userRole, setUserRole] = useState<'parent' | 'teacher' | null>(null)
   const [booking, setBooking] = useState<any>(null)
   const [loading, setLoading] = useState(true)
-
-  // Calendar Engine Local Component States
   const [currentMonth, setCurrentMonth] = useState(new Date()) 
   const [teacherTimeSlots, setTeacherTimeSlots] = useState<string[]>([])
   const [teacherBaseDays, setTeacherBaseDays] = useState<string[]>([])
-  
-  // Master overlap arrays compiled from DB
   const [busyScheduleSlots, setBusyScheduleSlots] = useState<ConflictSession[]>([])
 
   // Form Processing States (Parent Input States)
@@ -48,6 +42,8 @@ function UnifiedPostDemoContent() {
   const [totalSessions, setTotalSessions] = useState<number>(10)
   const [proposedTimeslot, setProposedTimeslot] = useState('')
   const [selectedDates, setSelectedDates] = useState<Date[]>([])
+  const [cancelReason, setCancelReason] = useState('')
+  const [showCancelFeedbackBox, setShowCancelFeedbackBox] = useState(false)
   
   // Teacher Review & Revision States
   const [changeComment, setChangeComment] = useState('')
@@ -60,14 +56,12 @@ function UnifiedPostDemoContent() {
   const weekDaysHeader = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat']
   const today = startOfDay(new Date()) 
 
-  // Core Data Fetch Function (Can be cleanly re-called by real-time stream updates)
   const loadWorkflowContext = useCallback(async (uid: string) => {
     if (!bookingId) {
       setLoading(false)
       return
     }
 
-    // 1. Fetch main booking context
     const { data, error } = await supabase
       .from('bookings')
       .select('*, parent, teacher')
@@ -89,6 +83,7 @@ function UnifiedPostDemoContent() {
       if (data.proposed_topic) setProposedTopic(data.proposed_topic)
       if (data.total_sessions) setTotalSessions(data.total_sessions || 10)
       if (data.proposed_timeslot) setProposedTimeslot(data.proposed_timeslot)
+      if (data.reason_to_cancel) setCancelReason(data.reason_to_cancel)
       
       if (data.proposed_dates) {
         const parsedDates = data.proposed_dates.map((dStr: string) => parseISO(dStr))
@@ -102,7 +97,6 @@ function UnifiedPostDemoContent() {
       }
       if (data.is_satisfied !== null) setIsSatisfied(data.is_satisfied)
 
-      // 2. Fetch Assigned Teacher catalogs
       const { data: teacherData } = await supabase
         .from('teachers')
         .select('time_slots, available_days')
@@ -114,15 +108,13 @@ function UnifiedPostDemoContent() {
         setTeacherBaseDays(teacherData.available_days || [])
       }
 
-      // 3. COMPILE TEACHER CONFLICTS (Both active bookings and generated sessions)
       const parsedConflicts: ConflictSession[] = []
 
-      // Query A: Conflict dates from bookings table
       const { data: conflictingBookings } = await supabase
         .from('bookings')
         .select('proposed_dates, proposed_timeslot')
         .eq('teacher', data.teacher)
-        .neq('id', bookingId) // Ignore current record mapping
+        .neq('id', bookingId)
         .in('status', ['waiting_teacher_confirmation', 'payment_pending', 'booked', 'active'])
 
       conflictingBookings?.forEach(b => {
@@ -133,7 +125,6 @@ function UnifiedPostDemoContent() {
         }
       })
 
-      // Query B: Conflict slots from structural running live sessions table
       const { data: conflictingSessions } = await supabase
         .from('sessions')
         .select('session_date, session_time, bookings!inner(teacher)')
@@ -151,7 +142,6 @@ function UnifiedPostDemoContent() {
     setLoading(false)
   }, [bookingId])
 
-  // Initial Auth hook & Real-Time Sync Channel Initialization
   useEffect(() => {
     let activeUser: string | null = null
 
@@ -168,7 +158,6 @@ function UnifiedPostDemoContent() {
 
     setupWorkflow()
 
-    // Realtime channel stream configuration mapping updates dynamically
     const channel = supabase
       .channel(`booking-sync-${bookingId}`)
       .on(
@@ -185,19 +174,16 @@ function UnifiedPostDemoContent() {
     }
   }, [bookingId, router, loadWorkflowContext])
 
-  // Clear dates safely if parent alters selected operational hours setup
   const handleTimeslotChange = (newSlot: string) => {
     setProposedTimeslot(newSlot)
     setSelectedDates([])
   }
 
-  // --- INTERACTIVE CALENDAR UTILITIES WITH TIMING GUARD OVERLAPS ---
   const monthStart = startOfMonth(currentMonth)
   const monthEnd = endOfMonth(currentMonth)
   const daysInMonth = eachDayOfInterval({ start: monthStart, end: monthEnd })
   const startOffset = getDay(monthStart) 
 
-  // Central validation tracking utility checking if a date has an active teacher block
   const isTimeSlotOverlapping = (dateString: string) => {
     if (!proposedTimeslot) return false
     return busyScheduleSlots.some(
@@ -266,12 +252,22 @@ function UnifiedPostDemoContent() {
     })
   }
 
-  // Transaction submission handlers (Automatic local reloading is removed as Realtime triggers update)
+  // --- INTERACTIVE SYSTEM EVENT HANDLERS ---
   const handleParentSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
+    
     if (isSatisfied === false || wishToContinue === false) {
+      if (!showCancelFeedbackBox) {
+        setShowCancelFeedbackBox(true);
+        return;
+      }
+      
       setSubmitting(true)
-      await supabase.from('bookings').update({ status: 'cancelled', is_satisfied: isSatisfied }).eq('id', bookingId)
+      setBooking((prev: any) => ({ ...prev, status: 'cancelled', reason_to_cancel: cancelReason }))
+      await supabase
+        .from('bookings')
+        .update({ status: 'cancelled', is_satisfied: isSatisfied, reason_to_cancel: cancelReason.trim() })
+        .eq('id', bookingId)
       setSubmitting(false)
       return
     }
@@ -283,6 +279,16 @@ function UnifiedPostDemoContent() {
 
     setSubmitting(true)
     const formattedDatesArray = selectedDates.map(d => format(d, 'yyyy-MM-dd'))
+
+    setBooking((prev: any) => ({
+      ...prev,
+      status: 'waiting_teacher_confirmation',
+      is_satisfied: isSatisfied,
+      proposed_topic: proposedTopic,
+      total_sessions: totalSessions,
+      proposed_dates: formattedDatesArray,
+      proposed_timeslot: proposedTimeslot
+    }))
 
     const { error } = await supabase
       .from('bookings')
@@ -297,18 +303,26 @@ function UnifiedPostDemoContent() {
       .eq('id', bookingId)
 
     setSubmitting(false)
-    if (error) alert(error.message)
+    if (error) {
+      alert(error.message)
+      if (userId) loadWorkflowContext(userId)
+    }
   }
 
   const handleTeacherApprove = async () => {
     setSubmitting(true)
+    setBooking((prev: any) => ({ ...prev, status: 'payment_pending' }))
+
     const { error } = await supabase
       .from('bookings')
       .update({ status: 'payment_pending', confirmed_at: new Date() })
       .eq('id', bookingId)
 
     setSubmitting(false)
-    if (error) alert(error.message)
+    if (error) {
+      alert(error.message)
+      if (userId) loadWorkflowContext(userId)
+    }
   }
 
   const handleTeacherRequestChange = async () => {
@@ -317,24 +331,38 @@ function UnifiedPostDemoContent() {
       return
     }
     setSubmitting(true)
+    setBooking((prev: any) => ({ 
+      ...prev, 
+      status: 'parent_approval_pending', 
+      teacher_notes: changeComment.trim() 
+    }))
+
     const { error } = await supabase
       .from('bookings')
       .update({ status: 'parent_approval_pending', teacher_notes: changeComment.trim() })
       .eq('id', bookingId)
 
     setSubmitting(false)
-    if (error) alert(error.message)
+    if (error) {
+      alert(error.message)
+      if (userId) loadWorkflowContext(userId)
+    }
   }
 
   const handleSimulatePayment = async () => {
     setSubmitting(true)
+    setBooking((prev: any) => ({ ...prev, status: 'booked' }))
+
     const { error } = await supabase
       .from('bookings')
       .update({ status: 'booked', paid_at: new Date() })
       .eq('id', bookingId)
 
     setSubmitting(false)
-    if (error) alert(error.message)
+    if (error) {
+      alert(error.message)
+      if (userId) loadWorkflowContext(userId)
+    }
   }
 
   const handleGenerateSessions = async (e: React.FormEvent) => {
@@ -348,6 +376,8 @@ function UnifiedPostDemoContent() {
     }
 
     setSubmitting(true)
+    setBooking((prev: any) => ({ ...prev, status: 'active' }))
+
     const bulkSessionsPayload = structuralTopicsList.map(([dateString, topicText]) => ({
       booking_id: bookingId,
       status: 'pending',
@@ -360,6 +390,7 @@ function UnifiedPostDemoContent() {
 
     if (sessionError) {
       alert(`Transaction aborted: ${sessionError.message}`)
+      if (userId) loadWorkflowContext(userId)
       setSubmitting(false)
       return
     }
@@ -367,7 +398,10 @@ function UnifiedPostDemoContent() {
     const { error: bookingError } = await supabase.from('bookings').update({ status: 'active' }).eq('id', bookingId)
     setSubmitting(false)
 
-    if (bookingError) alert(`Configuration error: ${bookingError.message}`)
+    if (bookingError) {
+      alert(`Configuration error: ${bookingError.message}`)
+      if (userId) loadWorkflowContext(userId)
+    }
   }
 
   if (loading) return <div className="p-12 text-center text-xs font-bold text-slate-400 animate-pulse tracking-widest">SYNCHRONIZING RECURRING LIFECYCLE INTERFACE...</div>
@@ -403,24 +437,38 @@ function UnifiedPostDemoContent() {
           <div className="space-y-2">
             <label className="block text-xs font-black uppercase tracking-wider text-slate-700">1. Are you satisfied with the teacher's class?</label>
             <div className="grid grid-cols-2 gap-4">
-              <button type="button" onClick={() => setIsSatisfied(true)} className={`p-4 border rounded-2xl font-bold text-xs transition ${isSatisfied === true ? 'border-green-500 bg-green-50/30 text-green-700' : 'border-slate-200 hover:bg-slate-50'}`}>🎯 Yes, fully satisfied</button>
-              <button type="button" onClick={() => setIsSatisfied(false)} className={`p-4 border rounded-2xl font-bold text-xs transition ${isSatisfied === false ? 'border-rose-500 bg-rose-50/30 text-rose-700' : 'border-slate-200 hover:bg-slate-50'}`}>🤔 No, request alternative</button>
+              <button type="button" onClick={() => { setIsSatisfied(true); setShowCancelFeedbackBox(false); }} className={`p-4 border rounded-2xl font-bold text-xs transition ${isSatisfied === true ? 'border-green-500 bg-green-50/30 text-green-700' : 'border-slate-200 hover:bg-slate-50'}`}>🎯 Yes, fully satisfied</button>
+              <button type="button" onClick={() => { setIsSatisfied(false); setWishToContinue(null); }} className={`p-4 border rounded-2xl font-bold text-xs transition ${isSatisfied === false ? 'border-rose-500 bg-rose-50/30 text-rose-700' : 'border-slate-200 hover:bg-slate-50'}`}>🤔 No, request alternative</button>
             </div>
           </div>
 
-          {isSatisfied && (
+          {isSatisfied === true && (
             <div className="space-y-2 animate-fadeIn">
               <label className="block text-xs font-black uppercase tracking-wider text-slate-700">2. Do you wish to continue to book sessions for this teacher?</label>
               <div className="grid grid-cols-2 gap-4">
-                <button type="button" onClick={() => setWishToContinue(true)} className={`p-4 border rounded-2xl font-bold text-xs transition ${wishToContinue === true ? 'border-blue-500 bg-blue-50/30 text-blue-700' : 'border-slate-200 hover:bg-slate-50'}`}>🚀 Yes, let's book</button>
-                <button type="button" onClick={() => setWishToContinue(false)} className={`p-4 border rounded-2xl font-bold text-xs transition ${wishToContinue === false ? 'border-slate-400 bg-slate-50 text-slate-600' : 'border-slate-200 hover:bg-slate-50'}`}>✕ No, cancel layout</button>
+                <button type="button" onClick={() => { setWishToContinue(true); setShowCancelFeedbackBox(false); }} className={`p-4 border rounded-2xl font-bold text-xs transition ${wishToContinue === true ? 'border-blue-500 bg-blue-50/30 text-blue-700' : 'border-slate-200 hover:bg-slate-50'}`}>🚀 Yes, let's book</button>
+                <button type="button" onClick={() => { setWishToContinue(false); }} className={`p-4 border rounded-2xl font-bold text-xs transition ${wishToContinue === false ? 'border-slate-400 bg-slate-50 text-slate-600' : 'border-slate-200 hover:bg-slate-50'}`}>✕ No, cancel layout</button>
               </div>
+            </div>
+          )}
+
+          {/* DYNAMIC CANCELLATION FEEDBACK FIELD */}
+          {((isSatisfied === false) || (isSatisfied === true && wishToContinue === false)) && showCancelFeedbackBox && (
+            <div className="space-y-2 p-4 bg-rose-50/40 border border-rose-100 rounded-2xl animate-fadeIn">
+              <label className="block text-xs font-black uppercase tracking-wider text-rose-800">Provide Cancellation Reason / Feedback</label>
+              <textarea
+                required
+                rows={3}
+                value={cancelReason}
+                onChange={(e) => setCancelReason(e.target.value)}
+                placeholder="Please share your reasons or any feedback regarding this decision..."
+                className="w-full p-3 border border-slate-200 rounded-xl text-xs bg-white focus:outline-none focus:ring-1 focus:ring-rose-400"
+              />
             </div>
           )}
 
           {isSatisfied && wishToContinue && (
             <div className="space-y-6 pt-4 border-t border-slate-100">
-              
               <div className="space-y-2">
                 <label className="block text-xs font-black uppercase tracking-wider text-slate-700">3. No. of sessions to book (as per your discussion with the teacher)</label>
                 <div className="flex items-center gap-3">
@@ -519,7 +567,7 @@ function UnifiedPostDemoContent() {
             disabled={submitting || (isSatisfied === true && wishToContinue === true && selectedDates.length !== totalSessions)} 
             className="w-full py-3 bg-blue-600 hover:bg-blue-700 disabled:bg-slate-200 text-white text-xs font-black uppercase tracking-wider rounded-xl transition shadow-md"
           >
-            {submitting ? "Processing..." : isSatisfied === false || wishToContinue === false ? "Confirm Stop Request" : "🚀 Send for Teacher Confirmation"}
+            {submitting ? "Processing..." : (isSatisfied === false || wishToContinue === false) ? (showCancelFeedbackBox ? "Confirm & Transmit Feedback" : "Write Feedback & Cancel") : "🚀 Send for Teacher Confirmation"}
           </button>
         </form>
       )}
@@ -638,6 +686,34 @@ function UnifiedPostDemoContent() {
               </Link>
             ) : (
               <Link href="/dashboard/teacher" className="inline-block px-5 py-2.5 bg-green-700 hover:bg-green-800 text-white font-black text-xs uppercase tracking-wider rounded-xl transition shadow-sm">
+                Return to Teacher Dashboard
+              </Link>
+            )}
+          </div>
+        </div>
+      )}
+
+      {/* UNIFIED CANCELLATION REDIRECT SYSTEM STATE PANEL (BOTH ROLES) */}
+      {booking.status === 'cancelled' && (
+        <div className="p-8 text-center bg-rose-50 border border-rose-200 rounded-3xl text-rose-800 space-y-4 animate-fadeIn">
+          <span className="text-3xl">✕</span>
+          <h4 className="text-sm font-black uppercase tracking-wide">Workflow Cancelled</h4>
+          <p className="text-xs text-slate-500 max-w-sm mx-auto">This blueprint cycle has been aborted. Feedback details have been transmitted and cataloged successfully.</p>
+          
+          {booking.reason_to_cancel && (
+            <div className="p-3.5 bg-white border border-rose-100 rounded-xl max-w-md mx-auto text-left">
+              <span className="text-[9px] font-bold text-slate-400 uppercase tracking-widest block mb-0.5">Recorded Feedback:</span>
+              <p className="text-xs italic font-medium text-slate-600">"{booking.reason_to_cancel}"</p>
+            </div>
+          )}
+
+          <div className="pt-2">
+            {userRole === 'parent' ? (
+              <Link href="/dashboard/parent" className="inline-block px-5 py-2.5 bg-rose-600 hover:bg-rose-700 text-white font-black text-xs uppercase tracking-wider rounded-xl transition shadow-sm">
+                Return to Parent Dashboard
+              </Link>
+            ) : (
+              <Link href="/dashboard/teacher" className="inline-block px-5 py-2.5 bg-slate-800 hover:bg-slate-900 text-white font-black text-xs uppercase tracking-wider rounded-xl transition shadow-sm">
                 Return to Teacher Dashboard
               </Link>
             )}
