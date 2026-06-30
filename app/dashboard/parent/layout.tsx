@@ -1,6 +1,6 @@
 "use client"
 
-import { useState, useEffect } from 'react'
+import { useState, useEffect, Suspense } from 'react'
 import { supabase } from '@/lib/supabase'
 import { useRouter, usePathname, useSearchParams } from 'next/navigation'
 
@@ -15,10 +15,10 @@ import NotificationCenter from '@/components/NotificationCenter'
 
 type TabID = 'home' | 'children' | 'book' | 'chat' | 'profile' | 'billing'
 
-export default function ParentDashboardLayout() {
+function ParentDashboardLayoutContent() {
   const router = useRouter()
   const pathname = usePathname()
-  const searchParams = useSearchParams() // 🔗 Read live routing queries
+  const searchParams = useSearchParams() // 🔗 Safely extracted inside the Suspense Boundary
   
   const [activeTab, setActiveTab] = useState<TabID>('home') 
   const [parentId, setParentId] = useState<string>('')
@@ -26,7 +26,6 @@ export default function ParentDashboardLayout() {
   const [loading, setLoading] = useState(true)
 
   // 🎯 UNIVERSAL PARAM WORKSPACE HANDLER:
-  // Listens to URL changes and updates the view dynamically
   useEffect(() => {
     if (pathname?.includes('/booking')) {
       setActiveTab('book')
@@ -144,5 +143,18 @@ export default function ParentDashboardLayout() {
         </main>
       </div>
     </div>
+  )
+}
+
+// 📦 Safe Export Root Wrapped in a Next.js Client Suspense Boundary Container
+export default function ParentDashboardLayout() {
+  return (
+    <Suspense fallback={
+      <div className="w-screen h-screen bg-slate-50 flex items-center justify-center">
+        <span className="w-6 h-6 border-4 border-blue-600 border-t-transparent rounded-full animate-spin" />
+      </div>
+    }>
+      <ParentDashboardLayoutContent />
+    </Suspense>
   )
 }
