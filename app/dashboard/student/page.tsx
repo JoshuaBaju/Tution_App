@@ -1,5 +1,5 @@
 "use client"
-import { useEffect } from 'react'
+import { useEffect, Suspense } from 'react'
 import { useSearchParams } from 'next/navigation'
 import { useStudent } from './layout'
 
@@ -12,10 +12,10 @@ import ChatRoomTab from './components/ChatRoomTab'
 
 type TabID = 'home' | 'schedule' | 'reports' | 'locker' | 'chat'
 
-export default function StudentDashboardPage() {
+function StudentDashboardPageContent() {
   // Destructure state from your layout provider context
   const { student, activeTab, setActiveTab } = useStudent() as any
-  const searchParams = useSearchParams() // 🔗 Read live routing queries safely
+  const searchParams = useSearchParams() // 🔗 Read live routing queries safely inside Suspense
 
   // 🎯 UNIVERSAL PARAM WORKSPACE HANDLER:
   // Dynamically monitors Next.js URL parameter changes
@@ -49,5 +49,18 @@ export default function StudentDashboardPage() {
       {activeTab === 'locker' && <LockerRoomsTab studentId={student.id} />}
       {activeTab === 'chat' && <ChatRoomTab studentId={student.id} />} 
     </>
+  )
+}
+
+// 📦 Safe Export Root Wrapped in a Next.js Client Suspense Boundary Container
+export default function StudentDashboardPage() {
+  return (
+    <Suspense fallback={
+      <div className="flex items-center justify-center py-20">
+        <span className="w-5 h-5 border-2 border-slate-300 border-t-slate-600 rounded-full animate-spin" />
+      </div>
+    }>
+      <StudentDashboardPageContent />
+    </Suspense>
   )
 }

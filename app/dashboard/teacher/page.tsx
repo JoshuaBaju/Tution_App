@@ -1,6 +1,6 @@
 "use client"
 
-import { useState, useEffect } from 'react'
+import { useState, useEffect, Suspense } from 'react'
 import { useSearchParams } from 'next/navigation'
 import { supabase } from '@/lib/supabase'
 import HomeTab from './components/HomeTab'
@@ -12,12 +12,12 @@ import ChatRoomTab from './components/ChatRoomTab'
 
 type TabID = 'home' | 'schedule' | 'locker' | 'reports' | 'chat' | 'profile'
 
-export default function TeacherDashboardPage() {
+function TeacherDashboardPageContent() {
   const [activeTab, setActiveTab] = useState<TabID>('home')
   const [teacherId, setTeacherId] = useState<string | null>(null)
   const [mountedMain, setMountedMain] = useState(false)
   
-  const searchParams = useSearchParams() // 🔗 Read live routing queries
+  const searchParams = useSearchParams() // 🔗 Safe live parameter extraction within a Suspense framework
 
   useEffect(() => {
     async function resolveId() {
@@ -26,7 +26,6 @@ export default function TeacherDashboardPage() {
       if (user) setTeacherId(user.id)
       
       // 2. 🎯 UNIVERSAL PARAM WORKSPACE HANDLER:
-      // Extracts whatever parameter is passed and matches it dynamically against valid layouts
       const incomingTab = searchParams.get('tab') as TabID | null
       const validTabs: TabID[] = ['home', 'schedule', 'locker', 'reports', 'chat', 'profile']
 
@@ -87,5 +86,18 @@ export default function TeacherDashboardPage() {
         <div className="bg-white border border-slate-200 rounded-3xl p-6 min-h-[85vh] shadow-xs" />
       )}
     </>
+  )
+}
+
+// 📦 Safe Export Root Wrapped in a Next.js Client Suspense Boundary Container
+export default function TeacherDashboardPage() {
+  return (
+    <Suspense fallback={
+      <div className="bg-white border border-slate-200 rounded-3xl p-6 min-h-[85vh] shadow-xs flex items-center justify-center">
+        <span className="w-5 h-5 border-2 border-slate-300 border-t-slate-600 rounded-full animate-spin" />
+      </div>
+    }>
+      <TeacherDashboardPageContent />
+    </Suspense>
   )
 }

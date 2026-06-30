@@ -1,14 +1,14 @@
 "use client"
-import { useEffect, useState } from 'react'
+import { useEffect, useState, Suspense } from 'react'
 import { useRouter, useSearchParams } from 'next/navigation'
 import { supabase } from '@/lib/supabase'
 import FileDirectory from '@/app/meeting/components/FileDirectory'
 
 type Tab = 'overview' | 'children' | 'billing'
 
-export default function ParentDashboard() {
+function ParentDashboardContent() {
   const router = useRouter()
-  const searchParams = useSearchParams() // 🔗 Read live routing queries
+  const searchParams = useSearchParams() // 🔗 Read live routing queries safely inside Suspense
   
   const [activeTab, setActiveTab] = useState<Tab>('overview')
   const [parentId, setParentId] = useState<string | null>(null)
@@ -432,5 +432,20 @@ export default function ParentDashboard() {
         </div>
       )}
     </>
+  )
+}
+
+// 📦 Safe Export Root Wrapped in a Next.js Client Suspense Boundary Container
+export default function ParentDashboard() {
+  return (
+    <Suspense fallback={
+      <div className="space-y-6">
+        <div className="py-20 text-center text-slate-400 font-medium text-xs uppercase tracking-widest animate-pulse">
+          Prerendering Layout Canvas...
+        </div>
+      </div>
+    }>
+      <ParentDashboardContent />
+    </Suspense>
   )
 }
