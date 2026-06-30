@@ -35,7 +35,7 @@ function UnifiedPostDemoContent() {
   const [teacherBaseDays, setTeacherBaseDays] = useState<string[]>([])
   const [busyScheduleSlots, setBusyScheduleSlots] = useState<ConflictSession[]>([])
 
-  // Form Processing States (Parent Input States)
+  // Form Processing States
   const [isSatisfied, setIsSatisfied] = useState<boolean | null>(null)
   const [wishToContinue, setWishToContinue] = useState<boolean | null>(null)
   const [proposedTopic, setProposedTopic] = useState('')
@@ -50,11 +50,48 @@ function UnifiedPostDemoContent() {
   const [showRejectBox, setShowRejectBox] = useState(false)
   const [submitting, setSubmitting] = useState(false)
 
-  // Final Phase State: Syllabus mapping dictionary
+  // Final Phase State
   const [sessionTopics, setSessionTopics] = useState<{ [key: string]: string }>({})
 
   const weekDaysHeader = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat']
   const today = startOfDay(new Date()) 
+
+  // Notification Dispatch Pipeline (Column Matched to NotificationCenter Schema)
+  const sendWorkflowNotification = useCallback(async (targetUserId: string, title: string, messageText: string) => {
+    try {
+      if (!bookingId) return
+
+      // 1. Check if the recipient is online viewing this exact dashboard link via presence matrix
+      const { data: presenceMatch } = await supabase
+        .from('status_presence')
+        .select('id')
+        .eq('user_id', targetUserId)
+        .eq('active_viewing_id', bookingId)
+        .maybeSingle()
+
+      // 2. Transmit alert matching NotificationCenter variables exactly
+      await supabase.from('notifications').insert({
+        user_id: targetUserId,
+        title: title,
+        description: messageText,                                 // Mapped to "description"
+        category: 'session',                                       // Sets dynamic emoji indicator icon
+        link_to: `/dashboard/post-demo?booking=${bookingId}`,      // Mapped to "link_to" using post-demo pathing
+        is_read: !!presenceMatch                                   // Marked read if they're actively on the page
+      })
+    } catch (err) {
+      console.error("Notification channel logging failure:", err)
+    }
+  }, [bookingId])
+
+  // Clear unread notification counters for this dynamic query segment upon viewport entry
+  const clearCurrentPageNotifications = useCallback(async (uid: string) => {
+    if (!bookingId) return
+    await supabase
+      .from('notifications')
+      .update({ is_read: true })
+      .eq('user_id', uid)
+      .like('link_to', `%booking=${bookingId}%`)                  // Column key matched to link_to
+  }, [bookingId])
 
   const loadWorkflowContext = useCallback(async (uid: string) => {
     if (!bookingId) {
@@ -139,9 +176,10 @@ function UnifiedPostDemoContent() {
       })
 
       setBusyScheduleSlots(parsedConflicts)
+      await clearCurrentPageNotifications(uid)
     }
     setLoading(false)
-  }, [bookingId])
+  }, [bookingId, clearCurrentPageNotifications])
 
   useEffect(() => {
     let activeUser: string | null = null
@@ -155,6 +193,13 @@ function UnifiedPostDemoContent() {
       activeUser = session.user.id
       setUserId(activeUser)
       await loadWorkflowContext(activeUser)
+
+      // Insert active visibility status record
+      await supabase.from('status_presence').upsert({
+        user_id: activeUser,
+        active_viewing_id: bookingId,
+        updated_at: new Date()
+      })
     }
 
     setupWorkflow()
@@ -172,6 +217,9 @@ function UnifiedPostDemoContent() {
 
     return () => {
       supabase.removeChannel(channel)
+      if (activeUser) {
+        supabase.from('status_presence').delete().eq('user_id', activeUser)
+      }
     }
   }, [bookingId, router, loadWorkflowContext])
 
@@ -231,7 +279,7 @@ function UnifiedPostDemoContent() {
 
   const handleHeaderClick = (dayIndex: number) => {
     if (!proposedTimeslot) {
-      alert("Please configure your layout preferred time slot before using automatic column assignment.")
+      alert("Please configure your preferred timeslot before using automatic column assignment.")
       return
     }
 
@@ -253,7 +301,6 @@ function UnifiedPostDemoContent() {
     })
   }
 
-  // --- INTERACTIVE SYSTEM EVENT HANDLERS ---
   const handleParentSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
     
@@ -269,6 +316,8 @@ function UnifiedPostDemoContent() {
         .from('bookings')
         .update({ status: 'cancelled', is_satisfied: isSatisfied, reason_to_cancel: cancelReason.trim() })
         .eq('id', bookingId)
+
+      await sendWorkflowNotification(booking.teacher, "Course Aborted by Parent", "A post-demo arrangement was marked as canceled by the parent.")
       setSubmitting(false)
       return
     }
@@ -291,7 +340,7 @@ function UnifiedPostDemoContent() {
       proposed_timeslot: proposedTimeslot
     }))
 
-    const { error } = await supabase
+    await supabase
       .from('bookings')
       .update({
         status: 'waiting_teacher_confirmation',
@@ -303,27 +352,21 @@ function UnifiedPostDemoContent() {
       })
       .eq('id', bookingId)
 
+    await sendWorkflowNotification(booking.teacher, "New Blueprint Configuration Sent", "The parent has configured schedule parameters for your review.")
     setSubmitting(false)
-    if (error) {
-      alert(error.message)
-      if (userId) loadWorkflowContext(userId)
-    }
   }
 
   const handleTeacherApprove = async () => {
     setSubmitting(true)
     setBooking((prev: any) => ({ ...prev, status: 'payment_pending' }))
 
-    const { error } = await supabase
+    await supabase
       .from('bookings')
       .update({ status: 'payment_pending', confirmed_at: new Date() })
       .eq('id', bookingId)
 
+    await sendWorkflowNotification(booking.parent, "Schedule Approved!", "Your instructor approved your schedule metrics. Ready for final payment checkout.")
     setSubmitting(false)
-    if (error) {
-      alert(error.message)
-      if (userId) loadWorkflowContext(userId)
-    }
   }
 
   const handleTeacherRequestChange = async () => {
@@ -338,32 +381,26 @@ function UnifiedPostDemoContent() {
       teacher_notes: changeComment.trim() 
     }))
 
-    const { error } = await supabase
+    await supabase
       .from('bookings')
       .update({ status: 'parent_approval_pending', teacher_notes: changeComment.trim() })
       .eq('id', bookingId)
 
+    await sendWorkflowNotification(booking.parent, "Revisions Requested by Tutor", `Note: ${changeComment.trim()}`)
     setSubmitting(false)
-    if (error) {
-      alert(error.message)
-      if (userId) loadWorkflowContext(userId)
-    }
   }
 
   const handleSimulatePayment = async () => {
     setSubmitting(true)
     setBooking((prev: any) => ({ ...prev, status: 'booked' }))
 
-    const { error } = await supabase
+    await supabase
       .from('bookings')
       .update({ status: 'booked', paid_at: new Date() })
       .eq('id', bookingId)
 
+    await sendWorkflowNotification(booking.teacher, "Invoice Settled", "The student portfolio payment was received. Ready to generate live rows syllabus.")
     setSubmitting(false)
-    if (error) {
-      alert(error.message)
-      if (userId) loadWorkflowContext(userId)
-    }
   }
 
   const handleGenerateSessions = async (e: React.FormEvent) => {
@@ -391,18 +428,13 @@ function UnifiedPostDemoContent() {
 
     if (sessionError) {
       alert(`Transaction aborted: ${sessionError.message}`)
-      if (userId) loadWorkflowContext(userId)
       setSubmitting(false)
       return
     }
 
-    const { error: bookingError } = await supabase.from('bookings').update({ status: 'active' }).eq('id', bookingId)
+    await supabase.from('bookings').update({ status: 'active' }).eq('id', bookingId)
+    await sendWorkflowNotification(booking.parent, "Syllabus Deployed & Active!", "Your course curriculum layout is finalized and live rooms are created.")
     setSubmitting(false)
-
-    if (bookingError) {
-      alert(`Configuration error: ${bookingError.message}`)
-      if (userId) loadWorkflowContext(userId)
-    }
   }
 
   if (loading) return <div className="p-12 text-center text-xs font-bold text-slate-400 animate-pulse tracking-widest">SYNCHRONIZING RECURRING LIFECYCLE INTERFACE...</div>
@@ -453,7 +485,6 @@ function UnifiedPostDemoContent() {
             </div>
           )}
 
-          {/* DYNAMIC CANCELLATION FEEDBACK FIELD */}
           {((isSatisfied === false) || (isSatisfied === true && wishToContinue === false)) && showCancelFeedbackBox && (
             <div className="space-y-2 p-4 bg-rose-50/40 border border-rose-100 rounded-2xl animate-fadeIn">
               <label className="block text-xs font-black uppercase tracking-wider text-rose-800">Provide Cancellation Reason / Feedback</label>
@@ -462,8 +493,8 @@ function UnifiedPostDemoContent() {
                 rows={3}
                 value={cancelReason}
                 onChange={(e) => setCancelReason(e.target.value)}
-                placeholder="Please share your reasons or any feedback regarding this decision..."
-                className="w-full p-3 border border-slate-200 rounded-xl text-xs bg-white focus:outline-none focus:ring-1 focus:ring-rose-400"
+                placeholder="Please share your reasons..."
+                className="w-full p-3 border border-slate-200 rounded-xl text-xs bg-white focus:outline-none"
               />
             </div>
           )}
@@ -471,7 +502,7 @@ function UnifiedPostDemoContent() {
           {isSatisfied && wishToContinue && (
             <div className="space-y-6 pt-4 border-t border-slate-100">
               <div className="space-y-2">
-                <label className="block text-xs font-black uppercase tracking-wider text-slate-700">3. No. of sessions to book (as per your discussion with the teacher)</label>
+                <label className="block text-xs font-black uppercase tracking-wider text-slate-700">3. No. of sessions to book</label>
                 <div className="flex items-center gap-3">
                   <input 
                     type="number" min={5} 
@@ -483,13 +514,13 @@ function UnifiedPostDemoContent() {
                     }} 
                     className="w-24 p-2.5 border border-slate-200 rounded-xl text-sm font-black bg-slate-50 text-center text-blue-600" 
                   />
-                  <span className="text-xs text-slate-400 font-bold">(Minimum 5 entry matrix blocks required)</span>
+                  <span className="text-xs text-slate-400 font-bold">(Minimum 5 entry blocks required)</span>
                 </div>
               </div>
 
               <div className="space-y-2">
-                <label className="block text-xs font-black uppercase tracking-wider text-slate-700">4. Topic to be taken (as per discussion with the teacher)</label>
-                <input type="text" required placeholder="e.g., Target Foundations of Geometry blocks" value={proposedTopic} onChange={(e) => setProposedTopic(e.target.value)} className="w-full px-4 py-2.5 border border-slate-200 rounded-xl text-xs font-medium bg-slate-50" />
+                <label className="block text-xs font-black uppercase tracking-wider text-slate-700">4. Topic to be taken</label>
+                <input type="text" required placeholder="e.g., Target Foundations of Geometry" value={proposedTopic} onChange={(e) => setProposedTopic(e.target.value)} className="w-full px-4 py-2.5 border border-slate-200 rounded-xl text-xs font-medium bg-slate-50" />
               </div>
 
               <div className="space-y-2">
@@ -500,22 +531,21 @@ function UnifiedPostDemoContent() {
                   value={proposedTimeslot}
                   onChange={e => handleTimeslotChange(e.target.value)}
                 >
-                  <option value="">-- Choose an operational hour slot from the tutor's catalog --</option>
+                  <option value="">-- Choose an hour slot --</option>
                   {teacherTimeSlots.map(slot => (
                     <option key={slot} value={slot}>{slot}</option>
                   ))}
                 </select>
               </div>
 
-              {/* INTEGRATED FULL CALENDAR ENGINE */}
               <div className="space-y-3 p-4 bg-slate-50 border border-slate-200 rounded-2xl">
                 <div className="flex justify-between items-center border-b border-slate-200/60 pb-2">
-                  <label className="block text-xs font-black uppercase tracking-wider text-slate-700">6. Choose Your {totalSessions} Course Calendar Dates</label>
+                  <label className="block text-xs font-black uppercase tracking-wider text-slate-700">6. Choose Your {totalSessions} Calendar Dates</label>
                   <span className="text-xs font-mono font-bold text-blue-600 bg-blue-100/70 px-2 py-0.5 rounded">Selected: {selectedDates.length}/{totalSessions}</span>
                 </div>
 
                 {!proposedTimeslot && (
-                  <p className="text-[11px] text-amber-600 font-bold text-center bg-amber-50 border border-amber-200 rounded-lg p-2">⚠️ Please select a timeslot first to evaluate teacher calendar availability matrices.</p>
+                  <p className="text-[11px] text-amber-600 font-bold text-center bg-amber-50 border border-amber-200 rounded-lg p-2">⚠️ Please select a timeslot first to evaluate teacher calendar availability.</p>
                 )}
 
                 <div className="flex justify-between items-center bg-white p-2 rounded-xl border border-slate-100">
@@ -552,12 +582,6 @@ function UnifiedPostDemoContent() {
                       </button>
                     ))}
                   </div>
-                </div>
-                
-                <div className="flex gap-4 justify-center items-center text-[10px] font-bold pt-1 text-slate-400">
-                  <div className="flex items-center gap-1"><span className="w-2.5 h-2.5 rounded bg-blue-50 border border-blue-100 block"/> Available</div>
-                  <div className="flex items-center gap-1"><span className="w-2.5 h-2.5 rounded bg-blue-600 block"/> Selected</div>
-                  <div className="flex items-center gap-1"><span className="w-2.5 h-2.5 rounded bg-rose-100 block"/> Overlap Conflict</div>
                 </div>
               </div>
             </div>
@@ -605,15 +629,27 @@ function UnifiedPostDemoContent() {
         </div>
       )}
 
-      {/* FALLBACK SYSTEM VIEWS */}
+      {/* FALLBACK INTERSTITIAL SYSTEM VIEWS WITH NAVIGATION CONTROL OPTIONS */}
       {booking.status === 'parent_approval_pending' && userRole === 'teacher' && (
-        <div className="p-8 text-center border border-dashed rounded-2xl text-slate-400 font-medium text-xs">⏳ Waiting for the parent to select schedule entries using the monthly calendar interface grid...</div>
+        <div className="p-8 text-center border border-dashed rounded-2xl text-slate-400 font-medium text-xs space-y-4">
+          <p>⏳ Waiting for the parent to configure schedule parameters using the interactive matrix grid...</p>
+          <div className="flex justify-center gap-3 pt-2">
+            <span className="animate-pulse px-3 py-1 bg-slate-100 rounded-lg text-slate-500">Awaiting live updates</span>
+            <Link href="/dashboard/teacher" className="px-3 py-1 bg-blue-600 text-white font-bold rounded-lg hover:bg-blue-700 transition">Go to Dashboard</Link>
+          </div>
+        </div>
       )}
       {booking.status === 'waiting_teacher_confirmation' && userRole === 'parent' && (
-        <div className="p-4 bg-blue-50 border border-blue-100 rounded-2xl text-xs text-blue-800 font-bold animate-pulse">⏳ Your proposed calendar metrics and hourly parameters are under review by your tutor.</div>
+        <div className="p-8 text-center border border-dashed rounded-2xl text-slate-400 font-medium text-xs space-y-4">
+          <p className="text-blue-600 font-bold">⏳ Proposed configuration profiles are currently undergoing tutor evaluation reviews.</p>
+          <div className="flex justify-center gap-3 pt-2">
+            <span className="animate-pulse px-3 py-1 bg-blue-50 text-blue-500 rounded-lg">Awaiting confirmation</span>
+            <Link href="/dashboard/parent" className="px-3 py-1 bg-slate-900 text-white font-bold rounded-lg hover:bg-slate-800 transition">Go to Dashboard</Link>
+          </div>
+        </div>
       )}
 
-      {/* PHASE 3: BILLING SYSTEM GATEWAY (PARENT SEES THIS) */}
+      {/* PHASE 3: BILLING SYSTEM GATEWAY */}
       {booking.status === 'payment_pending' && userRole === 'parent' && (
         <div className="text-center p-6 bg-slate-50 border rounded-2xl space-y-4">
           <div className="text-3xl">💳</div>
@@ -627,23 +663,28 @@ function UnifiedPostDemoContent() {
 
       {/* PHASE 3 (TEACHER VIEW STATUS) */}
       {booking.status === 'payment_pending' && userRole === 'teacher' && (
-        <div className="p-8 text-center border border-dashed rounded-2xl text-slate-400 font-medium text-xs">💳 Schedule approved! Waiting for parent to settle invoice calculations at checkout...</div>
-      )}
-
-      {/* MID-WAY CHECKPOINT: PAID BUT NO SYLLABUS (PARENT ONLY VIEWS STATE) */}
-      {booking.status === 'booked' && userRole === 'parent' && (
-        <div className="p-8 text-center border border-dashed rounded-2xl text-slate-400 font-medium text-xs bg-slate-50/50 space-y-4">
-          <div className="text-green-500 font-bold">🎉 Payment Received Successfully!</div>
-          <p className="max-w-xs mx-auto text-[11px]">Your teacher is now filling in the dynamic day-by-day lesson topics.</p>
-          <div className="pt-2">
-            <Link href="/dashboard/parent" className="px-4 py-2 bg-slate-900 text-white font-black text-xs uppercase tracking-wider rounded-xl transition">
-              Go back to Dashboard
-            </Link>
+        <div className="p-8 text-center border border-dashed rounded-2xl text-slate-400 font-medium text-xs space-y-4">
+          <p>💳 Schedule approved! Waiting for parent to settle invoice calculations at checkout...</p>
+          <div className="flex justify-center gap-3 pt-2">
+            <span className="animate-pulse px-3 py-1 bg-slate-100 rounded-lg text-slate-500">Waiting for payment</span>
+            <Link href="/dashboard/teacher" className="px-3 py-1 bg-blue-600 text-white font-bold rounded-lg hover:bg-blue-700 transition">Go to Dashboard</Link>
           </div>
         </div>
       )}
 
-      {/* PHASE 4: CHARGED STATUS / TOPIC ALLOCATION (TEACHER SEES THIS) */}
+      {/* MID-WAY CHECKPOINT: PAID BUT NO SYLLABUS */}
+      {booking.status === 'booked' && userRole === 'parent' && (
+        <div className="p-8 text-center border border-dashed rounded-2xl text-slate-400 font-medium text-xs bg-slate-50/50 space-y-4">
+          <div className="text-green-500 font-bold">🎉 Payment Received Successfully!</div>
+          <p className="max-w-xs mx-auto text-[11px]">Your teacher is now filling in the dynamic day-by-day lesson topics.</p>
+          <div className="flex justify-center gap-3 pt-2">
+            <span className="animate-pulse px-3 py-1 bg-green-50 text-green-600 rounded-lg">Awaiting syllabus allocation</span>
+            <Link href="/dashboard/parent" className="px-3 py-1 bg-slate-900 text-white font-bold rounded-lg hover:bg-slate-800 transition">Go to Dashboard</Link>
+          </div>
+        </div>
+      )}
+
+      {/* PHASE 4: CHARGED STATUS / TOPIC ALLOCATION */}
       {booking.status === 'booked' && userRole === 'teacher' && (
         <form onSubmit={handleGenerateSessions} className="space-y-6">
           <div className="bg-blue-50/50 border border-blue-100 rounded-2xl p-4 text-xs text-blue-900">
@@ -668,18 +709,17 @@ function UnifiedPostDemoContent() {
             ))}
           </div>
           <button type="submit" disabled={submitting} className="w-full py-3 bg-blue-600 hover:bg-blue-700 text-white text-xs font-black uppercase tracking-wider rounded-xl transition shadow-md">
-            {submitting ? "Spawning Dynamic Session Blocks..." : "✔️ Lock Syllabus & Generate Live Rows"}
+            {submitting ? "Spawning Session Blocks..." : "✔️ Lock Syllabus & Generate Live Rows"}
           </button>
         </form>
       )}
 
-      {/* FINAL LIFECYCLE COMPLETED SUMMARY SCREEN (BOTH ROLES) */}
+      {/* FINAL LIFECYCLE COMPLETED SUMMARY SCREEN */}
       {booking.status === 'active' && (
         <div className="p-8 text-center bg-green-50 border border-green-200 rounded-3xl text-green-800 space-y-4 animate-fadeIn">
           <span className="text-3xl">🚀</span>
           <h4 className="text-sm font-black uppercase tracking-wide">Course Is Active & Operational</h4>
           <p className="text-xs text-slate-500 max-w-sm mx-auto">This course setup workflow is complete. Main monitoring tables and active timeline components are fully configured.</p>
-          
           <div className="pt-2">
             {userRole === 'parent' ? (
               <Link href="/dashboard/parent" className="inline-block px-5 py-2.5 bg-green-700 hover:bg-green-800 text-white font-black text-xs uppercase tracking-wider rounded-xl transition shadow-sm">
@@ -694,7 +734,7 @@ function UnifiedPostDemoContent() {
         </div>
       )}
 
-      {/* UNIFIED CANCELLATION REDIRECT SYSTEM STATE PANEL (BOTH ROLES) */}
+      {/* UNIFIED CANCELLATION PANEL */}
       {booking.status === 'cancelled' && (
         <div className="p-8 text-center bg-rose-50 border border-rose-200 rounded-3xl text-rose-800 space-y-4 animate-fadeIn">
           <span className="text-3xl">✕</span>

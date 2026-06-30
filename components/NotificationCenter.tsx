@@ -40,20 +40,59 @@ export default function NotificationCenter({ userId }: { userId: string }) {
 
     loadNotifications()
 
+    // Fully reactive stream listening for ALL table events (*)
     const channel = supabase
       .channel(`user-alerts-${userId}`)
       .on(
         'postgres_changes',
         {
-          event: 'INSERT',
+          event: '*', 
           schema: 'public',
           table: 'notifications',
           filter: `user_id=eq.${userId}`
         },
         (payload) => {
-          const newAlert = payload.new as Notification
-          setNotifications(prev => [newAlert, ...prev].slice(0, 10))
-          setUnreadCount(prev => prev + 1)
+          if (payload.eventType === 'INSERT') {
+            const newAlert = payload.new as Notification
+            setNotifications(prev => {
+              if (prev.some(n => n.id === newAlert.id)) return prev
+              return [newAlert, ...prev].slice(0, 10)
+            })
+            if (!newAlert.is_read) {
+              setUnreadCount(prev => prev + 1)
+            }
+          } 
+          else if (payload.eventType === 'UPDATE') {
+            const updatedAlert = payload.new as Notification
+            
+            setNotifications(prev =>
+              prev.map(n => n.id === updatedAlert.id ? updatedAlert : n)
+            )
+
+            // Recalculate unread totals directly based on live incoming row changes
+            setUnreadCount(prev => {
+              const oldRow = notifications.find(n => n.id === updatedAlert.id)
+              const wasUnread = oldRow ? !oldRow.is_read : true
+              
+              if (wasUnread && updatedAlert.is_read) {
+                return Math.max(0, prev - 1)
+              }
+              if (!wasUnread && !updatedAlert.is_read) {
+                return prev + 1
+              }
+              return prev
+            })
+          }
+          else if (payload.eventType === 'DELETE') {
+            const oldId = (payload.old as any)?.id
+            if (oldId) {
+              setNotifications(prev => {
+                const filtered = prev.filter(n => n.id !== oldId)
+                setUnreadCount(filtered.filter(n => !n.is_read).length)
+                return filtered
+              })
+            }
+          }
         }
       )
       .subscribe()
@@ -69,7 +108,7 @@ export default function NotificationCenter({ userId }: { userId: string }) {
       supabase.removeChannel(channel)
       document.removeEventListener("mousedown", handleClickOutside)
     }
-  }, [userId])
+  }, [userId, notifications])
 
   const markAsRead = async (id: string) => {
     const { error } = await supabase
@@ -112,7 +151,7 @@ export default function NotificationCenter({ userId }: { userId: string }) {
       <button 
         onClick={() => setIsOpen(!isOpen)} 
         className={`relative p-2 text-slate-500 rounded-xl transition-all border ${
-          isOpen ? 'bg-slate-100 border-slate-300 text-slate-800' : 'bg-white border-slate-200 hover:border-slate-300 shadow-2xs'
+          isOpen ? 'bg-slate-100 border-slate-300 text-slate-800' : 'bg-white border-slate-200 hover:border-slate-300 shadow-sm'
         }`}
       >
         <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={2} stroke="currentColor" className="w-5 h-5">
@@ -125,9 +164,9 @@ export default function NotificationCenter({ userId }: { userId: string }) {
         )}
       </button>
 
-      {/* Flyout Dropdown Overlay Menu */}
+      {/* Flyout Dropdown Menu */}
       {isOpen && (
-        <div className="absolute right-0 mt-2 w-80 bg-white border border-slate-200 rounded-2xl shadow-xl z-50 p-4 space-y-3 animate-in fade-in slide-in-from-top-2 duration-100">
+        <div className="absolute right-0 mt-2 w-80 bg-white border border-slate-200 rounded-2xl shadow-xl z-50 p-4 space-y-3 animate-fadeIn">
           <div className="flex justify-between items-center border-b border-slate-100 pb-2">
             <div>
               <h3 className="text-xs font-black uppercase text-slate-400 tracking-wider">Workspace Alerts</h3>
@@ -154,14 +193,12 @@ export default function NotificationCenter({ userId }: { userId: string }) {
                     <span className="text-xs mt-0.5">{getCategoryEmoji(n.category)}</span>
                     <div className="space-y-0.5 min-w-0 flex-1">
                       <p className={`text-xs text-slate-800 truncate ${!n.is_read ? 'font-bold' : 'font-medium'}`}>{n.title}</p>
-                      {/* Changed to line-clamp-1 to strictly enforce a one-line notification preview text block */}
                       <p className="text-[11px] text-slate-500 line-clamp-1">{n.description}</p>
                     </div>
                     {!n.is_read && <span className="w-1.5 h-1.5 rounded-full bg-blue-600 shrink-0 mt-1.5" />}
                   </>
                 )
 
-                // If a redirect path is present, wrap inside a native app Route Link
                 if (n.link_to) {
                   return (
                     <Link 
@@ -169,7 +206,7 @@ export default function NotificationCenter({ userId }: { userId: string }) {
                       href={n.link_to}
                       onClick={async () => {
                         if (!n.is_read) await markAsRead(n.id)
-                        setIsOpen(false) // Close modal popover container
+                        setIsOpen(false)
                       }}
                       className={`${itemClasses} block`}
                     >
@@ -178,7 +215,6 @@ export default function NotificationCenter({ userId }: { userId: string }) {
                   )
                 }
 
-                // Fallback static action container item if no navigation path link is attached
                 return (
                   <div 
                     key={n.id} 

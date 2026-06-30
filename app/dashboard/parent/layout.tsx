@@ -2,7 +2,7 @@
 
 import { useState, useEffect } from 'react'
 import { supabase } from '@/lib/supabase'
-import { useRouter, usePathname } from 'next/navigation'
+import { useRouter, usePathname, useSearchParams } from 'next/navigation'
 
 // Tab Component Layout Registrations
 import OverviewTab from './components/HomeTab' 
@@ -10,7 +10,7 @@ import ManageChildrenTab from './components/ManageChildrenTab'
 import BookingProcedureTab from './components/BookingProcedureTab'
 import ProfileTab from './components/ProfileTab'
 import BillingTab from './components/BillingTab'
-import ChatRoom from './components/ChatRoomTab' // Now cleanly importing the dedicated wrapper
+import ChatRoom from './components/ChatRoomTab' 
 import NotificationCenter from '@/components/NotificationCenter'
 
 type TabID = 'home' | 'children' | 'book' | 'chat' | 'profile' | 'billing'
@@ -18,14 +18,30 @@ type TabID = 'home' | 'children' | 'book' | 'chat' | 'profile' | 'billing'
 export default function ParentDashboardLayout() {
   const router = useRouter()
   const pathname = usePathname()
+  const searchParams = useSearchParams() // 🔗 Read live routing queries
+  
   const [activeTab, setActiveTab] = useState<TabID>('home') 
   const [parentId, setParentId] = useState<string>('')
   const [parentName, setParentName] = useState<string>('')
   const [loading, setLoading] = useState(true)
 
+  // 🎯 UNIVERSAL PARAM WORKSPACE HANDLER:
+  // Listens to URL changes and updates the view dynamically
   useEffect(() => {
-    if (pathname?.includes('/booking')) setActiveTab('book')
-  }, [pathname])
+    if (pathname?.includes('/booking')) {
+      setActiveTab('book')
+      return
+    }
+
+    const incomingTab = searchParams.get('tab') as TabID | null
+    const validTabs: TabID[] = ['home', 'children', 'book', 'chat', 'profile', 'billing']
+
+    if (incomingTab && validTabs.includes(incomingTab)) {
+      setActiveTab(incomingTab)
+    } else if (!pathname?.includes('/booking')) {
+      setActiveTab('home') // Safe default layout configuration fallback
+    }
+  }, [searchParams, pathname])
 
   useEffect(() => {
     async function checkSecuritySession() {
@@ -124,8 +140,6 @@ export default function ParentDashboardLayout() {
           {activeTab === 'book' && <BookingProcedureTab parentId={parentId} />}
           {activeTab === 'profile' && <ProfileTab parentId={parentId} />}
           {activeTab === 'billing' && <BillingTab />}
-          
-          {/* Renders the parent container component cleanly */}
           {activeTab === 'chat' && <ChatRoom parentId={parentId} />}
         </main>
       </div>

@@ -1,7 +1,6 @@
-// app/dashboard/parent/page.tsx
 "use client"
 import { useEffect, useState } from 'react'
-import { useRouter } from 'next/navigation'
+import { useRouter, useSearchParams } from 'next/navigation'
 import { supabase } from '@/lib/supabase'
 import FileDirectory from '@/app/meeting/components/FileDirectory'
 
@@ -9,8 +8,11 @@ type Tab = 'overview' | 'children' | 'billing'
 
 export default function ParentDashboard() {
   const router = useRouter()
+  const searchParams = useSearchParams() // 🔗 Read live routing queries
+  
   const [activeTab, setActiveTab] = useState<Tab>('overview')
   const [parentId, setParentId] = useState<string | null>(null)
+  const [mountedMain, setMountedMain] = useState(false)
   const [loading, setLoading] = useState(true)
   
   // Core Data States
@@ -51,7 +53,12 @@ export default function ParentDashboard() {
       
       if (students) {
         setChildren(students)
-        if (students.length > 0) {
+        
+        // Match explicit incoming URL states, otherwise default to first profile position
+        const targetStudent = searchParams.get('studentId')
+        if (targetStudent && students.some(s => s.id === targetStudent)) {
+          setSelectedChildLocker(`student_${targetStudent}`)
+        } else if (students.length > 0) {
           setSelectedChildLocker(`student_${students[0].id}`)
         }
       }
@@ -80,6 +87,7 @@ export default function ParentDashboard() {
     }
   }
 
+  // 🎯 UNIVERSAL PARAM PIPELINE FOR PARENTS
   useEffect(() => {
     async function syncSession() {
       const { data: { session } } = await supabase.auth.getSession()
@@ -87,9 +95,27 @@ export default function ParentDashboard() {
         setParentId(session.user.id)
         await loadParentData(session.user.id)
       }
+      
+      // Handle navigation deep-links directly during mount phase
+      const incomingTab = searchParams.get('tab') as Tab | null
+      const studentIdParam = searchParams.get('studentId')
+      
+      const validTabs: Tab[] = ['overview', 'children', 'billing']
+
+      if (incomingTab && validTabs.includes(incomingTab)) {
+        setActiveTab(incomingTab)
+      } else {
+        setActiveTab('overview') // Safe fallback layout defaults
+      }
+      
+      if (studentIdParam) {
+        setSelectedChildLocker(`student_${studentIdParam}`)
+      }
+
+      setMountedMain(true)
     }
     syncSession()
-  }, [])
+  }, [searchParams])
 
   const handleAddChild = async (e: React.FormEvent) => {
     e.preventDefault()
@@ -119,7 +145,7 @@ export default function ParentDashboard() {
     setChildGrade('')
   }
 
-  if (!parentId) return null
+  if (!mountedMain || !parentId) return null
 
   const displayedBookings = selectedChildFilter 
     ? bookings.filter(b => b.student_id === selectedChildFilter)
@@ -127,7 +153,7 @@ export default function ParentDashboard() {
 
   return (
     <>
-      {/* 1. PORTAL SLOT PASSING RIGHT INTO INTERACTIVE LAYOUT SIDEBAR ELEMENT BLOCK */}
+      {/* 1. PORTAL WORKSPACE SIDEBAR ELEMENTS */}
       <nav className="flex flex-row sm:flex-col gap-1 overflow-x-auto sm:overflow-x-visible pb-2 sm:pb-0">
         <button
           onClick={() => setActiveTab('overview')}
@@ -155,7 +181,7 @@ export default function ParentDashboard() {
         </button>
       </nav>
 
-      {/* 2. RENDERING PIPELINE TARGETED INTO CENTRAL CANVAS ATTACHMENT VIEWPORT */}
+      {/* 2. LAYOUT VIEWPORT PORTAL ATTACHMENT CANVAS */}
       {typeof window !== 'undefined' && document.getElementById('parent-main-viewport') ? (
         require('react-dom').createPortal(
           <div className="space-y-6 animate-in fade-in duration-150">
@@ -346,9 +372,15 @@ export default function ParentDashboard() {
           </div>,
           document.getElementById('parent-main-viewport')!
         )
-      ) : null}
+      ) : (
+        <div className="space-y-6 animate-in fade-in duration-150">
+          <div className="py-20 text-center text-slate-400 font-medium text-xs uppercase tracking-widest animate-pulse">
+            Loading layout viewport target...
+          </div>
+        </div>
+      )}
 
-      {/* MODAL POPUP COMPONENT (Kept in standard component tree loop) */}
+      {/* MODAL POPUP COMPONENT */}
       {isModalOpen && (
         <div className="fixed inset-0 bg-slate-900/40 backdrop-blur-xs flex items-center justify-center z-50 p-4">
           <div className="bg-white border border-slate-200 w-full max-w-md rounded-2xl p-6 shadow-2xl space-y-4">

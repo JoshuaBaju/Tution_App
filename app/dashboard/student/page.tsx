@@ -1,4 +1,6 @@
 "use client"
+import { useEffect } from 'react'
+import { useSearchParams } from 'next/navigation'
 import { useStudent } from './layout'
 
 // Clean targeted relative path component imports
@@ -6,10 +8,29 @@ import HomeTab from './components/HomeTab'
 import ScheduleTab from './components/ScheduleTab'
 import ReportsTab from './components/ReportsTab'
 import LockerRoomsTab from './components/LockerRoomsTab'
-import ChatRoomTab from './components/ChatRoomTab' // 💡 Added your modular student chat wrapper
+import ChatRoomTab from './components/ChatRoomTab' 
+
+type TabID = 'home' | 'schedule' | 'reports' | 'locker' | 'chat'
 
 export default function StudentDashboardPage() {
-  const { student, activeTab } = useStudent()
+  // Destructure state from your layout provider context
+  const { student, activeTab, setActiveTab } = useStudent() as any
+  const searchParams = useSearchParams() // 🔗 Read live routing queries safely
+
+  // 🎯 UNIVERSAL PARAM WORKSPACE HANDLER:
+  // Dynamically monitors Next.js URL parameter changes
+  useEffect(() => {
+    if (!setActiveTab) return
+
+    const incomingTab = searchParams.get('tab') as TabID | null
+    const validTabs: TabID[] = ['home', 'schedule', 'reports', 'locker', 'chat']
+
+    if (incomingTab && validTabs.includes(incomingTab)) {
+      setActiveTab(incomingTab)
+    } else {
+      setActiveTab('home') // Safe default fallback if tab is missing or invalid
+    }
+  }, [searchParams, setActiveTab])
 
   // Guard clause to handle loading or undefined student context states safely
   if (!student?.id) {
@@ -26,7 +47,7 @@ export default function StudentDashboardPage() {
       {activeTab === 'schedule' && <ScheduleTab studentId={student.id} />}
       {activeTab === 'reports' && <ReportsTab studentId={student.id} />}
       {activeTab === 'locker' && <LockerRoomsTab studentId={student.id} />}
-      {activeTab === 'chat' && <ChatRoomTab studentId={student.id} />} {/* 🚀 New workspace route */}
+      {activeTab === 'chat' && <ChatRoomTab studentId={student.id} />} 
     </>
   )
 }

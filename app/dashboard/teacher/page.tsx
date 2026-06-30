@@ -1,37 +1,52 @@
 "use client"
 
 import { useState, useEffect } from 'react'
+import { useSearchParams } from 'next/navigation'
 import { supabase } from '@/lib/supabase'
 import HomeTab from './components/HomeTab'
 import Schedule from './components/Schedule'
 import ManageStudentsTab from './components/ManageStudentsTab' 
 import ReportsProgress from './components/ReportsProgress'
 import ProfileTab from './components/ProfileTab'
-import ChatRoomTab from './components/ChatRoomTab' // 💬 Imported Teacher Wrapper component
+import ChatRoomTab from './components/ChatRoomTab'
 
-// Appended 'chat' to the explicit union type definitions
 type TabID = 'home' | 'schedule' | 'locker' | 'reports' | 'chat' | 'profile'
 
 export default function TeacherDashboardPage() {
   const [activeTab, setActiveTab] = useState<TabID>('home')
   const [teacherId, setTeacherId] = useState<string | null>(null)
   const [mountedMain, setMountedMain] = useState(false)
+  
+  const searchParams = useSearchParams() // 🔗 Read live routing queries
 
   useEffect(() => {
     async function resolveId() {
+      // 1. Authenticate and resolve user context
       const { data: { user } } = await supabase.auth.getUser()
       if (user) setTeacherId(user.id)
+      
+      // 2. 🎯 UNIVERSAL PARAM WORKSPACE HANDLER:
+      // Extracts whatever parameter is passed and matches it dynamically against valid layouts
+      const incomingTab = searchParams.get('tab') as TabID | null
+      const validTabs: TabID[] = ['home', 'schedule', 'locker', 'reports', 'chat', 'profile']
+
+      if (incomingTab && validTabs.includes(incomingTab)) {
+        setActiveTab(incomingTab)
+      } else {
+        setActiveTab('home') // Safe fallback configuration if param is missing or empty
+      }
+      
       setMountedMain(true)
     }
     resolveId()
-  }, [])
+  }, [searchParams]) // Triggers cleanly when parameters route shifts
 
   const navItems = [
     { id: 'home', label: '🏠 Home Overview' },
     { id: 'schedule', label: '🗓️ My Schedule' },
     { id: 'locker', label: '🎒 Manage Students' }, 
     { id: 'reports', label: '📊 Student Reports' },
-    { id: 'chat', label: '💬 Messages Hub' }, // 💬 New Sidebar Item Added
+    { id: 'chat', label: '💬 Messages Hub' },
     { id: 'profile', label: '👤 Profile Settings' },
   ] as const
 
@@ -39,7 +54,7 @@ export default function TeacherDashboardPage() {
 
   return (
     <>
-      {/* 1. Mounts internal context directly into layout navigation sidebar loop */}
+      {/* SIDEBAR OR HORIZONTAL SYSTEM NAVIGATION LIST */}
       <nav className="flex flex-row sm:flex-col gap-1 overflow-x-auto sm:overflow-x-visible pb-2 sm:pb-0">
         {navItems.map((item) => (
           <button
@@ -55,7 +70,7 @@ export default function TeacherDashboardPage() {
         ))}
       </nav>
 
-      {/* 2. Directly handle target view display matrix overlay inside wrapper portal view frame handles */}
+      {/* SYSTEM CENTRAL PORTAL CONTAINER VIEWPORT ATTACHMENT PIPELINE */}
       {typeof window !== 'undefined' && document.getElementById('teacher-main-viewport') ? (
         require('react-dom').createPortal(
           <div className="bg-white border border-slate-200 rounded-3xl p-6 min-h-[85vh] shadow-xs animate-in fade-in duration-150">
@@ -64,14 +79,11 @@ export default function TeacherDashboardPage() {
             {activeTab === 'locker' && <ManageStudentsTab teacherId={teacherId} />} 
             {activeTab === 'reports' && <ReportsProgress teacherId={teacherId} />}
             {activeTab === 'profile' && <ProfileTab teacherId={teacherId} />}
-            
-            {/* 💬 Renders the dedicated teacher wrapper view inside the portal core */}
             {activeTab === 'chat' && <ChatRoomTab teacherId={teacherId} />}
           </div>,
-          document.getElementById('teacher-main-viewport')
+          document.getElementById('teacher-main-viewport')!
         )
       ) : (
-        // Initial fallback frame safe loader
         <div className="bg-white border border-slate-200 rounded-3xl p-6 min-h-[85vh] shadow-xs" />
       )}
     </>

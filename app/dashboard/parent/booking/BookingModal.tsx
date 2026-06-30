@@ -1,4 +1,3 @@
-// components/BookingModal.tsx
 "use client"
 import { useState, useEffect } from 'react'
 import { supabase } from '@/lib/supabase'
@@ -170,6 +169,32 @@ export default function BookingModal({
     }
   }
 
+  // 🚀 DISPATCH CHANNEL: Dispatches live alert mapped directly to the NotificationCenter interface
+  const sendDemoBookingNotification = async (newBookingId: string) => {
+    try {
+      const formattedDate = format(selectedDates[0], 'MMMM d, yyyy')
+
+      // Verify if the teacher is currently viewing the incoming lifecycle link 
+      const { data: presenceMatch } = await supabase
+        .from('status_presence')
+        .select('id')
+        .eq('user_id', teacherId)
+        .eq('active_viewing_id', newBookingId)
+        .maybeSingle()
+
+      await supabase.from('notifications').insert({
+        user_id: teacherId,
+        title: "New Demo Trial Booked! 🗓️",
+        description: `A parent booked a ${subject} trial demo with student ${studentName} for ${formattedDate} at ${selectedTimeSlot}.`,
+        category: 'session',                                       // Spawns calendar item layout icon
+        link_to: `/dashboard/teacher?tab=schedule`,   // Direct routing linkage
+        is_read: !!presenceMatch                                   // Silent read if already tracking layout row
+      })
+    } catch (err) {
+      console.error("Failed to distribute notification telemetry entry:", err)
+    }
+  }
+
   const handleFinalize = async () => {
     if (!studentId) return alert("System reference fault: Target student context lost.")
     if (selectedDates.length === 0) return alert("Please select a trial lesson date on the grid calendar.")
@@ -191,12 +216,20 @@ export default function BookingModal({
       status: 'demo_pending' // Pipeline sequence initialized
     }
 
-    const { error } = await supabase.from('bookings').insert([entryPayload])
+    const { data: bookingResult, error } = await supabase
+      .from('bookings')
+      .insert([entryPayload])
+      .select('id')
+      .single()
 
     if (error) {
       alert("Booking Transaction Aborted: " + error.message)
-    } else {
+    } else if (bookingResult) {
       await initializeClassroomFolder(teacherId, studentId)
+      
+      // 🚀 TRIGGER ENGINE: Transmit row details right out to the assigned teacher profile
+      await sendDemoBookingNotification(bookingResult.id)
+      
       alert(`Success! Your trial demo class request for ${studentName} has been initialized inside the dashboard pipeline loop.`)
       onClose()
     }

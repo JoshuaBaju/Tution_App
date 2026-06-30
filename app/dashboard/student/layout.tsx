@@ -4,7 +4,6 @@ import { useRouter } from 'next/navigation'
 import { supabase } from '@/lib/supabase'
 
 // Shared context matrix to pass profile details down to pages and child tabs easily
-// 💡 Added 'chat' to the allowed activeTab types here
 const StudentContext = createContext<{ student: any; activeTab: string; setActiveTab: (tab: any) => void }>({
   student: null,
   activeTab: 'home',
@@ -15,11 +14,30 @@ export const useStudent = () => useContext(StudentContext)
 
 export default function StudentDashboardLayout({ children }: { children: React.ReactNode }) {
   const router = useRouter()
-  // 💡 Updated the state type array to safely include 'chat'
   const [activeTab, setActiveTab] = useState<'home' | 'schedule' | 'reports' | 'locker' | 'chat'>('home')
   const [checkingAuth, setCheckingAuth] = useState(true)
   const [sidebarOpen, setSidebarOpen] = useState(true)
   const [student, setStudent] = useState<any>(null)
+
+  // Listen for deep-linked notification pathways inside the layout level
+  useEffect(() => {
+    if (typeof window === 'undefined') return
+
+    const parseTabFromUrl = () => {
+      const params = new URLSearchParams(window.location.search)
+      const tabParam = params.get('tab') as any
+
+      const validTabs = ['home', 'schedule', 'reports', 'locker', 'chat']
+      if (tabParam && validTabs.includes(tabParam)) {
+        setActiveTab(tabParam)
+      }
+    }
+
+    parseTabFromUrl()
+
+    window.addEventListener('popstate', parseTabFromUrl)
+    return () => window.removeEventListener('popstate', parseTabFromUrl)
+  }, [])
 
   useEffect(() => {
     let isMounted = true
@@ -95,8 +113,6 @@ export default function StudentDashboardLayout({ children }: { children: React.R
             <SidebarItem icon="📅" label="My Schedule" active={activeTab === 'schedule'} collapsed={!sidebarOpen} onClick={() => setActiveTab('schedule')} />
             <SidebarItem icon="📜" label="Progress Reports" active={activeTab === 'reports'} collapsed={!sidebarOpen} onClick={() => setActiveTab('reports')} />
             <SidebarItem icon="📂" label="Locker Rooms" active={activeTab === 'locker'} collapsed={!sidebarOpen} onClick={() => setActiveTab('locker')} />
-            
-            {/* 💬 NEW: Chat Navigation Row Link Item */}
             <SidebarItem icon="💬" label="Study Chat" active={activeTab === 'chat'} collapsed={!sidebarOpen} onClick={() => setActiveTab('chat')} />
           </nav>
 

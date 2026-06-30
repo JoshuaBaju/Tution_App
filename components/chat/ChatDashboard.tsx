@@ -51,20 +51,22 @@ export default function ChatDashboard({
     setMessages([])
   }
 
-  // Optimized Database Read Receipt execution + immediate UI feedback & notification clearance
+  // Optimized Database Read Receipt execution + immediate UI feedback & instant notification dismissal
+  // Optimized Database Read Receipt execution + immediate UI feedback & instant notification dismissal
   async function markMessagesAsRead(roomId: string) {
     if (!roomId || !currentUserId) return
 
     const now = new Date().toISOString()
 
-    const { error } = await supabase
+    // 1. Mark chat messages as read
+    const { error: chatError } = await supabase
       .from('chat_messages')
       .update({ read_at: now })
       .eq('room_id', roomId)
       .neq('sender_id', currentUserId)
       .is('read_at', null)
     
-    if (!error) {
+    if (!chatError) {
       setMessages((prev) =>
         prev.map((m) =>
           m.room_id === roomId && m.sender_id !== currentUserId && !m.read_at
@@ -74,18 +76,22 @@ export default function ChatDashboard({
       )
       onRefreshRoster()
 
-      // Clear any unread notifications matching this specific chat room channel structure
-      await supabase
+      // 2. Clear notifications using a less strict, bulletproof filter
+      const { error: notifError } = await supabase
         .from('notifications')
         .update({ is_read: true })
         .eq('user_id', currentUserId)
         .eq('category', 'chat')
-        .like('link_to', `%room=${roomId}%`)
+        .eq('is_read', false)
+        .filter('link_to', 'ilike', `%room=${roomId}%`) // 'ilike' makes it case-insensitive and safer across platforms
+        
+      if (notifError) {
+        console.error("Failed to dismiss matching notification row:", notifError.message)
+      }
     } else {
-      console.error("Database rejected read_at timestamp configuration:", error)
+      console.error("Database rejected read_at timestamp configuration:", chatError)
     }
   }
-
   // Live Message Sync Loop
   useEffect(() => {
     if (!activeRoomId) {
@@ -183,7 +189,7 @@ export default function ChatDashboard({
     const recipientId = activeContact.contact_id
     setNewMessage('')
 
-    // 1. Submit the message row to the database
+    // 1. Submit message to database
     const { data: insertedMsg, error } = await supabase
       .from('chat_messages')
       .insert([
@@ -192,16 +198,17 @@ export default function ChatDashboard({
       .select()
       .single()
 
-    // 2. Dispatch a notification with a clean one-line context preview snippet to the recipient
+    // 2. Dispatch cleanly formatted tab route strings to target recipients
     if (!error && insertedMsg) {
       const previewText = text.length > 60 ? `${text.slice(0, 60)}...` : text
+      const recipientRolePath = activeContact.contact_type === 'teacher' ? 'teacher' : activeContact.contact_type === 'parent' ? 'parent' : 'student';
       
       await sendNotification({
         userId: recipientId,
         title: `💬 New message from ${activeContact.contact_name || 'User'}`,
         description: previewText,
         category: 'chat',
-        linkTo: `/dashboard/chat?room=${targetRoom}&msg=${insertedMsg.id}`
+        linkTo: `/dashboard/${recipientRolePath}?tab=chat&room=${targetRoom}&msg=${insertedMsg.id}`
       })
     }
   }
