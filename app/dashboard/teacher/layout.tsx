@@ -1,125 +1,120 @@
-// app/dashboard/teacher/layout.tsx
 "use client"
-import React, { useState, useEffect, createContext, useContext } from 'react'
-import { supabase } from '@/lib/supabase'
+
+import {
+  createContext,
+  useContext,
+  useState,
+  useEffect,
+  Suspense,
+  type ReactNode
+} from 'react'
 import { useRouter, usePathname, useSearchParams } from 'next/navigation'
+import { supabase } from '@/lib/supabase'
 import NotificationCenter from '@/components/NotificationCenter'
 
-type TabID = 'home' | 'schedule' | 'workspace' | 'locker' | 'reports' | 'chat' | 'profile'
+// ---------------------------------------------------------------------------
+// 🏛️ Shared tab identity — single source of truth for the whole Teacher view
+// ---------------------------------------------------------------------------
+export type TabID = 'home' | 'schedule' | 'workspace' | 'locker' | 'reports' | 'chat' | 'profile'
 
-const TeacherContext = createContext<{
-  teacherId: string | null;
-  activeTab: TabID;
-  setActiveTab: (tab: TabID) => void;
-}>({
-  teacherId: null,
-  activeTab: 'home',
-  setActiveTab: () => {},
-})
+const VALID_TABS: TabID[] = ['home', 'schedule', 'workspace', 'locker', 'reports', 'chat', 'profile']
 
-export function useTeacher() {
-  return useContext(TeacherContext)
+interface TeacherContextValue {
+  teacherId: string
+  teacherName: string
+  activeTab: TabID
+  handleTabChange: (tab: TabID) => void
 }
 
-export default function TeacherLayout({
-  children,
-}: {
-  children: React.ReactNode
-}) {
+const TeacherContext = createContext<TeacherContextValue | null>(null)
+
+// Named export hook (kept as a plain named function per Turbopack mapping requirement)
+export function useTeacher() {
+  const ctx = useContext(TeacherContext)
+  if (!ctx) {
+    throw new Error('useTeacher() must be called from within TeacherDashboardLayout')
+  }
+  return ctx
+}
+
+// ---------------------------------------------------------------------------
+// 🎯 Layout content — auth guard, profile fetch, context + URL sync, shell
+// ---------------------------------------------------------------------------
+function TeacherDashboardLayoutContent({ children }: { children: ReactNode }) {
   const router = useRouter()
   const pathname = usePathname()
-  const searchParams = useSearchParams()
-  
-  const [teacherId, setTeacherId] = useState<string | null>(null)
-  const [teacherName, setTeacherName] = useState<string>('')
-  const [checkingAuth, setCheckingAuth] = useState(true)
+  const searchParams = useSearchParams() // 🔗 Safely extracted inside the Suspense Boundary
+
   const [activeTab, setActiveTab] = useState<TabID>('home')
+  const [teacherId, setTeacherId] = useState<string>('')
+  const [teacherName, setTeacherName] = useState<string>('')
+  const [loading, setLoading] = useState(true)
 
-  // Listen directly to Next.js live query param shifts
+  // 🎯 URL -> STATE: handles direct links, refreshes, and browser back/forward pops
   useEffect(() => {
-    const tabParam = searchParams.get('tab') as TabID
-    const validTabs: TabID[] = ['home', 'schedule', 'workspace', 'locker', 'reports', 'chat', 'profile']
-    
-    if (tabParam && validTabs.includes(tabParam)) {
-      setActiveTab(tabParam)
+    const incomingTab = searchParams.get('tab') as TabID | null
+
+    if (incomingTab && VALID_TABS.includes(incomingTab)) {
+      setActiveTab(incomingTab)
+    } else {
+      setActiveTab('home') // Safe default layout configuration fallback
     }
-  }, [searchParams])
+  }, [searchParams, pathname])
 
+  // 🎯 STATE -> URL: pushed from clicks, keeps other query params intact, no history lock
+  const handleTabChange = (tab: TabID) => {
+    setActiveTab(tab) // optimistic update so the UI feels instant
+
+    const params = new URLSearchParams(searchParams.toString())
+    params.set('tab', tab)
+    router.push(`${pathname}?${params.toString()}`, { scroll: false })
+  }
+
+  // 🔐 Session & profile guarding
   useEffect(() => {
-    let mounted = true
+    async function checkSecuritySession() {
+      const { data: { session }, error: authError } = await supabase.auth.getSession()
+      if (authError || !session?.user) return router.push('/login')
 
-    async function checkUserSession() {
-      const { data: { session }, error } = await supabase.auth.getSession()
-      
-      if (error || !session?.user) {
-        if (mounted) {
-          setCheckingAuth(false)
-          router.push('/login')
-        }
-        return
-      }
-
-      const { data: profile } = await supabase
+      const { data: profile, error: dbError } = await supabase
         .from('teachers')
         .select('id, name')
         .eq('id', session.user.id)
         .maybeSingle()
 
-      if (mounted) {
-        setTeacherId(session.user.id)
-        if (profile) setTeacherName(profile.name)
-        setCheckingAuth(false)
-      }
+      if (dbError || !profile) return router.push('/login')
+
+      setTeacherId(profile.id)
+      setTeacherName(profile.name || 'Educator')
+      setLoading(false)
     }
-
-    checkUserSession()
-
-    const { data: { subscription } } = supabase.auth.onAuthStateChange((event, session) => {
-      if (!mounted) return
-      if (session?.user) {
-        setTeacherId(session.user.id)
-        setCheckingAuth(false)
-      } else if (event === 'SIGNED_OUT') {
-        setTeacherId(null)
-        setCheckingAuth(false)
-        router.push('/login')
-      }
-    })
-
-    return () => {
-      mounted = false
-      subscription.unsubscribe()
-    }
+    checkSecuritySession()
   }, [router])
 
-  // 🎯 FIXED URL PUSH METHOD: Uses reliable URLSearchParams string building
-  const handleTabChange = (tab: TabID) => {
-    setActiveTab(tab)
-    const currentParams = new URLSearchParams(searchParams.toString())
-    currentParams.set('tab', tab)
-    router.push(`${pathname}?${currentParams.toString()}`)
-  };
-
-  if (checkingAuth || !teacherId) {
+  if (loading) {
     return (
-      <div className="min-h-screen flex flex-col items-center justify-center bg-slate-50 space-y-3">
-        <span className="w-6 h-6 border-2 border-blue-600 border-t-transparent rounded-full animate-spin" />
-        <p className="text-xs font-bold uppercase tracking-wider text-slate-400">Restoring Teacher Session...</p>
+      <div className="w-screen h-screen bg-slate-50 flex items-center justify-center">
+        <span className="w-6 h-6 border-4 border-blue-600 border-t-transparent rounded-full animate-spin" />
       </div>
     )
   }
 
   return (
-    <TeacherContext.Provider value={{ teacherId, activeTab, setActiveTab: handleTabChange }}>
-      <div className="w-screen h-screen flex bg-slate-50 text-slate-900 antialiased selection:bg-blue-600 selection:text-white overflow-hidden">
-        
+    <TeacherContext.Provider value={{ teacherId, teacherName, activeTab, handleTabChange }}>
+      <div className="w-screen h-screen flex flex-col sm:flex-row bg-slate-50 text-slate-900 overflow-hidden">
+        {/* SIDEBAR SHELL — the page portals its nav buttons into #teacher-sidebar-nav */}
         <aside className="w-full sm:w-64 bg-white border-b sm:border-b-0 sm:border-r border-slate-200 flex flex-col justify-between shrink-0 z-20">
           <div className="p-5 sm:p-6">
             <div className="mb-6 hidden sm:block">
-              <h1 className="text-xl font-black text-blue-600 tracking-tight">Tutor Terminal</h1>
-              <p className="text-[10px] text-slate-400 uppercase font-bold tracking-widest mt-1">Hero Classroom v1.0</p>
+              <h2 className="text-xl font-black text-blue-600 tracking-tight">Tutor Terminal</h2>
+              <p className="text-[11px] text-slate-400 mt-0.5 font-semibold">Teacher Console</p>
             </div>
-            {children}
+
+            {/* 🎨 Portal target: page.tsx injects nav buttons built from navItems here */}
+            <nav
+              id="teacher-sidebar-nav"
+              className="flex flex-row sm:flex-col gap-1 overflow-x-auto sm:overflow-x-visible pb-2 sm:pb-0"
+            />
           </div>
 
           <div className="p-4 border-t border-slate-100 hidden sm:block space-y-3">
@@ -128,34 +123,54 @@ export default function TeacherLayout({
             </div>
             <button
               type="button"
-              onClick={async () => {
-                await supabase.auth.signOut()
-                router.push('/login')
-              }}
-              className="w-full text-center py-2.5 text-xs font-black uppercase tracking-wider text-red-500 hover:bg-red-50 rounded-xl transition"
+              onClick={async () => { await supabase.auth.signOut(); router.push('/login') }}
+              className="w-full py-2.5 text-xs font-black uppercase tracking-wider text-red-500 hover:bg-red-50 rounded-xl transition"
             >
               Sign Out
             </button>
           </div>
         </aside>
 
+        {/* DASHBOARD VIEWPORT MATRIX */}
         <div className="flex-1 flex flex-col overflow-hidden relative">
-          <header className="h-14 bg-white border-b border-slate-200 px-6 sm:px-8 flex items-center justify-between shrink-0">
+          <header className="h-16 bg-white border-b border-slate-200 px-6 sm:px-8 flex items-center justify-between shrink-0">
             <span className="text-xs font-bold text-slate-400">
-              Welcome back, Instructor <span className="text-slate-700">{teacherName || 'Educator'}</span>
+              Welcome back, Instructor <span className="text-slate-700">{teacherName}</span>
             </span>
-            <div className="flex items-center gap-3">
+            <div className="flex items-center gap-4">
               <NotificationCenter userId={teacherId} />
-              <div className="w-8 h-8 rounded-full bg-slate-100 border border-slate-200 flex items-center justify-center font-bold text-xs text-slate-600 shadow-2xs">
+              <button
+                type="button"
+                onClick={() => handleTabChange('profile')}
+                className={`w-8 h-8 rounded-full border transition flex items-center justify-center font-bold text-xs shadow-2xs ${activeTab === 'profile' ? 'bg-blue-600 border-blue-600 text-white' : 'bg-slate-100 text-slate-600 border-slate-200'}`}
+              >
                 {teacherName ? teacherName.charAt(0).toUpperCase() : 'T'}
-              </div>
+              </button>
             </div>
           </header>
 
-          <main className="flex-1 overflow-y-auto p-6 sm:p-8" id="teacher-main-viewport" />
+          {/* 🎨 Portal target: page.tsx projects the active tab's content here */}
+          <main className="flex-1 overflow-y-auto p-6 sm:p-8 max-w-5xl w-full mx-auto">
+            <div id="teacher-main-viewport" />
+          </main>
         </div>
-
       </div>
+
+      {/* The Page (App Router's `children`) renders here */}
+      {children}
     </TeacherContext.Provider>
+  )
+}
+
+// 📦 Safe Export Root Wrapped in a Next.js Client Suspense Boundary Container
+export default function TeacherDashboardLayout({ children }: { children: ReactNode }) {
+  return (
+    <Suspense fallback={
+      <div className="w-screen h-screen bg-slate-50 flex items-center justify-center">
+        <span className="w-6 h-6 border-4 border-blue-600 border-t-transparent rounded-full animate-spin" />
+      </div>
+    }>
+      <TeacherDashboardLayoutContent>{children}</TeacherDashboardLayoutContent>
+    </Suspense>
   )
 }
