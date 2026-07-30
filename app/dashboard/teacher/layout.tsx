@@ -1,9 +1,25 @@
 // app/dashboard/teacher/layout.tsx
 "use client"
-import React, { useState, useEffect } from 'react'
+import React, { useState, useEffect, createContext, useContext } from 'react'
 import { supabase } from '@/lib/supabase'
-import { useRouter } from 'next/navigation'
+import { useRouter, usePathname, useSearchParams } from 'next/navigation'
 import NotificationCenter from '@/components/NotificationCenter'
+
+type TabID = 'home' | 'schedule' | 'workspace' | 'locker' | 'reports' | 'chat' | 'profile'
+
+const TeacherContext = createContext<{
+  teacherId: string | null;
+  activeTab: TabID;
+  setActiveTab: (tab: TabID) => void;
+}>({
+  teacherId: null,
+  activeTab: 'home',
+  setActiveTab: () => {},
+})
+
+export function useTeacher() {
+  return useContext(TeacherContext)
+}
 
 export default function TeacherLayout({
   children,
@@ -11,9 +27,23 @@ export default function TeacherLayout({
   children: React.ReactNode
 }) {
   const router = useRouter()
+  const pathname = usePathname()
+  const searchParams = useSearchParams()
+  
   const [teacherId, setTeacherId] = useState<string | null>(null)
   const [teacherName, setTeacherName] = useState<string>('')
   const [checkingAuth, setCheckingAuth] = useState(true)
+  const [activeTab, setActiveTab] = useState<TabID>('home')
+
+  // Listen directly to Next.js live query param shifts
+  useEffect(() => {
+    const tabParam = searchParams.get('tab') as TabID
+    const validTabs: TabID[] = ['home', 'schedule', 'workspace', 'locker', 'reports', 'chat', 'profile']
+    
+    if (tabParam && validTabs.includes(tabParam)) {
+      setActiveTab(tabParam)
+    }
+  }, [searchParams])
 
   useEffect(() => {
     let mounted = true
@@ -29,7 +59,6 @@ export default function TeacherLayout({
         return
       }
 
-      // Fetch teacher custom profile name
       const { data: profile } = await supabase
         .from('teachers')
         .select('id, name')
@@ -63,6 +92,14 @@ export default function TeacherLayout({
     }
   }, [router])
 
+  // 🎯 FIXED URL PUSH METHOD: Uses reliable URLSearchParams string building
+  const handleTabChange = (tab: TabID) => {
+    setActiveTab(tab)
+    const currentParams = new URLSearchParams(searchParams.toString())
+    currentParams.set('tab', tab)
+    router.push(`${pathname}?${currentParams.toString()}`)
+  };
+
   if (checkingAuth || !teacherId) {
     return (
       <div className="min-h-screen flex flex-col items-center justify-center bg-slate-50 space-y-3">
@@ -73,62 +110,52 @@ export default function TeacherLayout({
   }
 
   return (
-    <div className="w-screen h-screen flex bg-slate-50 text-slate-900 antialiased selection:bg-blue-600 selection:text-white overflow-hidden">
-      
-      {/* PERSISTENT STRUCTURAL SIDEBAR */}
-      <aside className="w-full sm:w-64 bg-white border-b sm:border-b-0 sm:border-r border-slate-200 flex flex-col justify-between shrink-0 z-20">
-        <div className="p-5 sm:p-6">
-          <div className="mb-6 hidden sm:block">
-            <h1 className="text-xl font-black text-blue-600 tracking-tight">Tutor Terminal</h1>
-            <p className="text-[10px] text-slate-400 uppercase font-bold tracking-widest mt-1">Hero Classroom v1.0</p>
-          </div>
-          
-          {/* Layout slots down into children pages for navigational sync tabs */}
-          {children}
-        </div>
-
-        <div className="p-4 border-t border-slate-100 hidden sm:block space-y-3">
-          <div className="text-center">
-            <p className="text-[10px] font-mono text-slate-400 truncate">ID: {teacherId.slice(0, 8)}...</p>
-          </div>
-          <button
-            type="button"
-            onClick={async () => {
-              await supabase.auth.signOut()
-              router.push('/login')
-            }}
-            className="w-full text-center py-2.5 text-xs font-black uppercase tracking-wider text-red-500 hover:bg-red-50 rounded-xl transition"
-          >
-            Sign Out
-          </button>
-        </div>
-      </aside>
-
-      {/* VIEWPORT CANVAS SHELL */}
-      <div className="flex-1 flex flex-col overflow-hidden relative">
+    <TeacherContext.Provider value={{ teacherId, activeTab, setActiveTab: handleTabChange }}>
+      <div className="w-screen h-screen flex bg-slate-50 text-slate-900 antialiased selection:bg-blue-600 selection:text-white overflow-hidden">
         
-        {/* UPPER REALTIME UNIFIED STATUS BANNER */}
-        <header className="h-14 bg-white border-b border-slate-200 px-6 sm:px-8 flex items-center justify-between shrink-0">
-          <span className="text-xs font-bold text-slate-400">
-            Welcome back, Instructor <span className="text-slate-700">{teacherName || 'Educator'}</span>
-          </span>
-          
-          <div className="flex items-center gap-3">
-            {/* Realtime Bell Drops Container */}
-            <NotificationCenter userId={teacherId} />
-
-            <div className="w-8 h-8 rounded-full bg-slate-100 border border-slate-200 flex items-center justify-center font-bold text-xs text-slate-600 shadow-2xs">
-              {teacherName ? teacherName.charAt(0).toUpperCase() : 'T'}
+        <aside className="w-full sm:w-64 bg-white border-b sm:border-b-0 sm:border-r border-slate-200 flex flex-col justify-between shrink-0 z-20">
+          <div className="p-5 sm:p-6">
+            <div className="mb-6 hidden sm:block">
+              <h1 className="text-xl font-black text-blue-600 tracking-tight">Tutor Terminal</h1>
+              <p className="text-[10px] text-slate-400 uppercase font-bold tracking-widest mt-1">Hero Classroom v1.0</p>
             </div>
+            {children}
           </div>
-        </header>
 
-        {/* CONTROLLER TARGET RENDERING SLOT */}
-        <main className="flex-1 overflow-y-auto p-6 sm:p-8" id="teacher-main-viewport">
-          {/* Sub tabs context mounts here seamlessly via context channels */}
-        </main>
+          <div className="p-4 border-t border-slate-100 hidden sm:block space-y-3">
+            <div className="text-center">
+              <p className="text-[10px] font-mono text-slate-400 truncate">ID: {teacherId.slice(0, 8)}...</p>
+            </div>
+            <button
+              type="button"
+              onClick={async () => {
+                await supabase.auth.signOut()
+                router.push('/login')
+              }}
+              className="w-full text-center py-2.5 text-xs font-black uppercase tracking-wider text-red-500 hover:bg-red-50 rounded-xl transition"
+            >
+              Sign Out
+            </button>
+          </div>
+        </aside>
+
+        <div className="flex-1 flex flex-col overflow-hidden relative">
+          <header className="h-14 bg-white border-b border-slate-200 px-6 sm:px-8 flex items-center justify-between shrink-0">
+            <span className="text-xs font-bold text-slate-400">
+              Welcome back, Instructor <span className="text-slate-700">{teacherName || 'Educator'}</span>
+            </span>
+            <div className="flex items-center gap-3">
+              <NotificationCenter userId={teacherId} />
+              <div className="w-8 h-8 rounded-full bg-slate-100 border border-slate-200 flex items-center justify-center font-bold text-xs text-slate-600 shadow-2xs">
+                {teacherName ? teacherName.charAt(0).toUpperCase() : 'T'}
+              </div>
+            </div>
+          </header>
+
+          <main className="flex-1 overflow-y-auto p-6 sm:p-8" id="teacher-main-viewport" />
+        </div>
+
       </div>
-
-    </div>
+    </TeacherContext.Provider>
   )
 }

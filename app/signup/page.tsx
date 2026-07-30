@@ -5,6 +5,9 @@ import { useRouter, useSearchParams } from 'next/navigation'
 
 const AVAILABLE_SUBJECTS = ['Mathematics', 'Physics', 'Chemistry', 'Biology', 'English', 'History', 'Geography', 'Computer Science']
 const WEEK_DAYS = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday']
+const AVAILABLE_GRADES = ['Grades 1-5', 'Grades 6-8', 'Grades 9-10', 'Grades 11-12', 'University']
+const POPULAR_COUNTRIES = ['India', 'United States', 'United Kingdom', 'Canada', 'Australia', 'United Arab Emirates', 'Saudi Arabia', 'Singapore']
+
 const TIME_SLOTS = [
   '04:00 AM - 05:00 AM', '05:00 AM - 06:00 AM', '06:00 AM - 07:00 AM', '07:00 AM - 08:00 AM',
   '08:00 AM - 09:00 AM', '09:00 AM - 10:00 AM', '10:00 AM - 11:00 AM', '11:00 AM - 12:00 PM',
@@ -17,10 +20,9 @@ function SignupFormContent() {
   const router = useRouter()
   const searchParams = useSearchParams()
 
-  // MATCHES PARAMS: ?student_id=e527b452...&email=trisha%40gmail.com
   const targetStudentId = searchParams.get('student_id')
   const inviteEmail = searchParams.get('email') || ''
-  const isStudentInvite = !!targetStudentId // True if a student ID parameter exists
+  const isStudentInvite = !!targetStudentId 
 
   const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
@@ -30,18 +32,21 @@ function SignupFormContent() {
   // Parent Fields
   const [parentName, setParentName] = useState('')
   const [phone, setPhone] = useState('')
-  const [country, setCountry] = useState('')
+  const [parentCountry, setParentCountry] = useState('')
+  const [parentCurrency, setParentCurrency] = useState('USD')
 
   // Teacher Fields
   const [teacherName, setTeacherName] = useState('')
   const [bio, setBio] = useState('')
   const [selectedSubjects, setSelectedSubjects] = useState<string[]>([])
   const [selectedDays, setSelectedDays] = useState<string[]>([])
-  const [rate, setRate] = useState('')
+  const [rate, setRate] = useState('650') 
   const [selectedSlots, setSelectedSlots] = useState<string[]>([])
   const [photoFile, setPhotoFile] = useState<File | null>(null)
+  const [teacherCountry, setTeacherCountry] = useState('India')
+  const [teacherCurrency, setTeacherCurrency] = useState('INR')
+  const [selectedGrades, setSelectedGrades] = useState<string[]>([])
 
-  // Sync state if student email arrives via parameter payload
   useEffect(() => {
     if (isStudentInvite && inviteEmail) {
       setEmail(inviteEmail.trim())
@@ -60,6 +65,12 @@ function SignupFormContent() {
     )
   }
 
+  const toggleGrade = (grade: string) => {
+    setSelectedGrades(prev => 
+      prev.includes(grade) ? prev.filter(g => g !== grade) : [...prev, grade]
+    )
+  }
+
   const toggleTimeSlot = (slot: string) => {
     setSelectedSlots(prev => 
       prev.includes(slot) ? prev.filter(s => s !== slot) : [...prev, slot]
@@ -71,7 +82,6 @@ function SignupFormContent() {
     if (loading) return
     setLoading(true)
 
-    // Validation Controls
     if (!email || !password) {
       alert("Please fill in your email and password.")
       setLoading(false)
@@ -79,7 +89,7 @@ function SignupFormContent() {
     }
 
     if (!isStudentInvite && role === 'parent') {
-      if (!parentName || !phone || !country) {
+      if (!parentName || !phone || !parentCountry) {
         alert("Parents must fill in Name, Phone Number, and Country.")
         setLoading(false)
         return
@@ -87,15 +97,14 @@ function SignupFormContent() {
     }
 
     if (!isStudentInvite && role === 'teacher') {
-      if (!teacherName || !bio || selectedSubjects.length === 0 || !rate || selectedDays.length === 0 || selectedSlots.length === 0) {
-        alert("Teachers must fill in all fields and select at least one Subject, Day, and Time Slot.")
+      if (!teacherName || !bio || selectedSubjects.length === 0 || !rate || selectedDays.length === 0 || selectedSlots.length === 0 || !teacherCountry || selectedGrades.length === 0) {
+        alert("Teachers must fill in all fields including Country, Grades, and Timings.")
         setLoading(false)
         return
       }
     }
 
     try {
-      // 1. Submit Core Authentication Request to Supabase Auth Server
       const { data, error } = await supabase.auth.signUp({ 
         email: email.trim(), 
         password 
@@ -110,9 +119,7 @@ function SignupFormContent() {
       if (data?.user) {
         const userId = data.user.id
 
-        // 2. Execution Pipeline Routes Based on Roles
         if (isStudentInvite) {
-          // Updates placeholder row ID with real Auth UID to maintain data consistency
           const { error: dbError } = await supabase
             .from('students')
             .update({ id: userId }) 
@@ -121,7 +128,7 @@ function SignupFormContent() {
           if (dbError) {
             alert("Student Account Link Error: " + dbError.message)
           } else {
-            alert("Student Launchpad successfully activated!")
+            alert("Student Hub successfully activated!")
             router.push('/dashboard/student')
             return
           }
@@ -134,7 +141,8 @@ function SignupFormContent() {
               email: email.trim(), 
               name: parentName, 
               phone_number: phone, 
-              country: country 
+              country: parentCountry,
+              currency: parentCurrency
             }])
 
           if (dbError) {
@@ -146,7 +154,6 @@ function SignupFormContent() {
           }
 
         } else {
-          // Process Teacher Asset Media Storage Files
           let photoUrl = ""
           if (photoFile) {
             const fileExt = photoFile.name.split('.').pop()
@@ -177,10 +184,13 @@ function SignupFormContent() {
               name: teacherName, 
               bio: bio, 
               subjects: selectedSubjects,
-              rate: parseFloat(rate) || 0, 
+              rate: parseFloat(rate) || 650, 
               available_days: selectedDays,
               time_slots: selectedSlots, 
-              photo_url: photoUrl
+              photo_url: photoUrl,
+              country: teacherCountry,
+              currency: teacherCurrency,
+              grades: selectedGrades
             }])
 
           if (dbError) {
@@ -193,7 +203,7 @@ function SignupFormContent() {
         }
       }
     } catch (err) {
-      console.error("System processing runtime exception error: ", err)
+      console.error("System processing error: ", err)
     } finally {
       setLoading(false)
     }
@@ -250,23 +260,80 @@ function SignupFormContent() {
           
           {!isStudentInvite && <hr className="my-4 border-slate-200" />}
 
-          {/* Parent Registration Inputs */}
+          {/* Parent Fields */}
           {!isStudentInvite && role === 'parent' && (
             <div className="space-y-4">
               <input type="text" placeholder="Full Name" className="w-full p-3 border rounded-lg focus:ring-2 focus:ring-blue-500 outline-none bg-white" value={parentName} onChange={e => setParentName(e.target.value)} />
               <input type="text" placeholder="Phone Number" className="w-full p-3 border rounded-lg focus:ring-2 focus:ring-blue-500 outline-none bg-white" value={phone} onChange={e => setPhone(e.target.value)} />
-              <input type="text" placeholder="Country" className="w-full p-3 border rounded-lg focus:ring-2 focus:ring-blue-500 outline-none bg-white" value={country} onChange={e => setCountry(e.target.value)} />
+              
+              <div className="grid grid-cols-2 gap-4">
+                <select 
+                  className="w-full p-3 border rounded-lg focus:ring-2 focus:ring-blue-500 outline-none bg-white text-slate-700 font-medium"
+                  value={parentCountry}
+                  onChange={e => setParentCountry(e.target.value)}
+                >
+                  <option value="" disabled>Select Country</option>
+                  {POPULAR_COUNTRIES.map(c => (
+                    <option key={c} value={c}>{c}</option>
+                  ))}
+                </select>
+
+                <select 
+                  className="w-full p-3 border rounded-lg focus:ring-2 focus:ring-blue-500 outline-none bg-white text-slate-700 font-medium"
+                  value={parentCurrency}
+                  onChange={e => setParentCurrency(e.target.value)}
+                >
+                  <option value="USD">USD ($)</option>
+                  <option value="INR">INR (₹)</option>
+                  <option value="EUR">EUR (€)</option>
+                  <option value="GBP">GBP (£)</option>
+                  <option value="CAD">CAD (C$)</option>
+                  <option value="AUD">AUD (A$)</option>
+                </select>
+              </div>
             </div>
           )}
 
-          {/* Teacher Profile Registration Forms */}
+          {/* Teacher Fields */}
           {!isStudentInvite && role === 'teacher' && (
             <div className="space-y-5">
               <input type="text" placeholder="Full Name" className="w-full p-3 border rounded-lg focus:ring-2 focus:ring-blue-500 outline-none bg-white" value={teacherName} onChange={e => setTeacherName(e.target.value)} />
               <textarea placeholder="Bio / Experience" className="w-full p-3 border rounded-lg focus:ring-2 focus:ring-blue-500 outline-none bg-white" value={bio} onChange={e => setBio(e.target.value)} />
               
+              <div className="grid grid-cols-2 gap-4">
+                <select 
+                  className="w-full p-3 border rounded-lg focus:ring-2 focus:ring-blue-500 outline-none bg-white text-slate-700 font-medium"
+                  value={teacherCountry}
+                  onChange={e => setTeacherCountry(e.target.value)}
+                >
+                  {POPULAR_COUNTRIES.map(c => (
+                    <option key={c} value={c}>{c}</option>
+                  ))}
+                </select>
+                <input type="text" placeholder="Currency" className="w-full p-3 border rounded-lg focus:ring-2 focus:ring-blue-500 outline-none bg-slate-50 text-slate-500 font-medium" value={teacherCurrency} disabled />
+              </div>
+
               <div>
-                <label className="text-sm font-bold text-slate-600 block mb-2">Select Subjects You Teach:</label>
+                <label className="text-sm font-bold text-slate-600 block mb-2">Grades You Can Take:</label>
+                <div className="flex flex-wrap gap-2">
+                  {AVAILABLE_GRADES.map(grade => {
+                    const isSelected = selectedGrades.includes(grade)
+                    return (
+                      <button
+                        key={grade}
+                        type="button"
+                        onClick={() => toggleGrade(grade)}
+                        className={`px-3 py-1.5 text-sm rounded-full font-medium transition border ${isSelected ? 'bg-blue-600 text-white border-blue-600 shadow-sm' : 'bg-slate-50 text-slate-600 border-slate-200 hover:bg-slate-100'}`}
+                      >
+                        {grade}
+                      </button>
+                    )
+                  })}
+                </div>
+              </div>
+
+              <div>
+                <label className="text-sm font-bold text-slate-600 block mb-2">Select Subjects:</label>
                 <div className="flex flex-wrap gap-2">
                   {AVAILABLE_SUBJECTS.map(subject => {
                     const isSelected = selectedSubjects.includes(subject)
@@ -284,7 +351,13 @@ function SignupFormContent() {
                 </div>
               </div>
 
-              <input type="number" placeholder="Hourly Rate ($)" className="w-full p-3 border rounded-lg focus:ring-2 focus:ring-blue-500 outline-none bg-white" value={rate} onChange={e => setRate(e.target.value)} />
+              <div className="space-y-1.5">
+                <input type="number" placeholder="Hourly Rate" className="w-full p-3 border rounded-lg focus:ring-2 focus:ring-blue-500 outline-none bg-slate-50 text-slate-500 cursor-not-allowed" value={rate} disabled />
+                <div className="bg-emerald-50 border border-emerald-200 rounded-lg p-3 text-xs text-emerald-800 font-semibold flex items-center justify-between">
+                  <span>System Standard Fixed Payout:</span>
+                  <span className="bg-emerald-600 text-white font-bold px-2 py-0.5 rounded">You will be paid INR 650 per hour</span>
+                </div>
+              </div>
               
               <div>
                 <label className="text-sm font-bold text-slate-600 block mb-2">Select Available Days:</label>
@@ -309,12 +382,8 @@ function SignupFormContent() {
                 <label className="text-sm font-bold text-slate-600 block mb-2">
                   Available Time Slots ({selectedSlots.length} selected):
                 </label>
-                
                 <div 
-                  onClick={() => {
-                    const drawer = document.getElementById('time-drawer')
-                    drawer?.classList.toggle('hidden')
-                  }}
+                  onClick={() => document.getElementById('time-drawer')?.classList.toggle('hidden')}
                   className="w-full p-3 border rounded-lg bg-white border-slate-200 cursor-pointer hover:bg-slate-50 transition min-h-[46px] flex flex-wrap gap-1.5 items-center text-slate-500 text-sm"
                 >
                   {selectedSlots.length === 0 ? (
@@ -336,13 +405,7 @@ function SignupFormContent() {
                   )}
                 </div>
 
-                <div 
-                  id="time-drawer" 
-                  className="hidden absolute z-10 left-0 right-0 mt-1 p-3 bg-white border border-slate-200 shadow-xl rounded-xl max-h-52 overflow-y-auto grid grid-cols-2 gap-1.5"
-                >
-                  <div className="col-span-2 text-[10px] uppercase font-bold text-slate-400 tracking-wider mb-1">
-                    Tap to add / remove slots:
-                  </div>
+                <div id="time-drawer" className="hidden absolute z-10 left-0 right-0 mt-1 p-3 bg-white border border-slate-200 shadow-xl rounded-xl max-h-52 overflow-y-auto grid grid-cols-2 gap-1.5">
                   {TIME_SLOTS.map(slot => {
                     const isSelected = selectedSlots.includes(slot)
                     return (
@@ -350,11 +413,7 @@ function SignupFormContent() {
                         key={slot}
                         type="button"
                         onClick={() => toggleTimeSlot(slot)}
-                        className={`p-2 text-xs rounded-lg font-medium transition border text-center ${
-                          isSelected 
-                            ? 'bg-blue-50 text-blue-600 border-blue-400 ring-1 ring-blue-400' 
-                            : 'bg-slate-50 text-slate-600 border-slate-200 hover:bg-slate-100'
-                        }`}
+                        className={`p-2 text-xs rounded-lg font-medium transition border text-center ${isSelected ? 'bg-blue-50 text-blue-600 border-blue-400' : 'bg-slate-50 text-slate-600 border-slate-200 hover:bg-slate-100'}`}
                       >
                         {slot}
                       </button>
@@ -375,20 +434,8 @@ function SignupFormContent() {
             disabled={loading} 
             className="w-full py-4 bg-blue-600 text-white rounded-xl font-black text-lg hover:bg-blue-700 transition disabled:bg-slate-400 shadow-md shadow-blue-600/10"
           >
-            {loading 
-              ? 'Processing Profile Registration...' 
-              : isStudentInvite 
-                ? 'Complete Account Activation' 
-                : `Complete ${role === 'parent' ? 'Parent' : 'Teacher'} Setup`
-            }
+            {loading ? 'Processing Profile Registration...' : isStudentInvite ? 'Complete Account Activation' : `Complete ${role === 'parent' ? 'Parent' : 'Teacher'} Setup`}
           </button>
-
-          <p className="text-center text-sm text-slate-500 mt-4">
-            Already have an account?{' '}
-            <button type="button" onClick={() => router.push('/login')} className="text-blue-600 font-bold hover:underline">
-              Sign In
-            </button>
-          </p>
         </form>
       </div>
     </div>
@@ -397,7 +444,7 @@ function SignupFormContent() {
 
 export default function Signup() {
   return (
-    <Suspense fallback={<div className="h-screen w-screen flex items-center justify-center text-slate-400 font-medium bg-slate-50">Loading Portal Parameters...</div>}>
+    <Suspense fallback={<div className="h-screen w-screen flex items-center justify-center text-slate-400 font-medium bg-slate-50">Loading Portal...</div>}>
       <SignupFormContent />
     </Suspense>
   )

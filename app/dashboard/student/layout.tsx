@@ -1,43 +1,47 @@
+// app/dashboard/student/layout.tsx
 "use client"
-import { useEffect, useState, createContext, useContext } from 'react'
-import { useRouter } from 'next/navigation'
+import React, { useState, useEffect, createContext, useContext } from 'react'
+import { useRouter, usePathname, useSearchParams } from 'next/navigation'
 import { supabase } from '@/lib/supabase'
+import NotificationCenter from '@/components/NotificationCenter'
 
-// Shared context matrix to pass profile details down to pages and child tabs easily
-const StudentContext = createContext<{ student: any; activeTab: string; setActiveTab: (tab: any) => void }>({
+type TabType = 'home' | 'schedule' | 'reports' | 'locker' | 'chat' | 'workspace'
+
+// Context matrix to bridge state to children pages
+const StudentContext = createContext<{ 
+  student: any; 
+  activeTab: TabType; 
+  setActiveTab: (tab: TabType) => void 
+}>({
   student: null,
   activeTab: 'home',
   setActiveTab: () => {},
 })
 
-export const useStudent = () => useContext(StudentContext)
+// 🌟 EXPLICIT NAMED EXPORT: Fixed to clear Turbopack/Next.js binding issues
+export function useStudent() {
+  return useContext(StudentContext)
+}
 
 export default function StudentDashboardLayout({ children }: { children: React.ReactNode }) {
   const router = useRouter()
-  const [activeTab, setActiveTab] = useState<'home' | 'schedule' | 'reports' | 'locker' | 'chat'>('home')
+  const pathname = usePathname()
+  const searchParams = useSearchParams()
+
+  const [activeTab, setActiveTab] = useState<TabType>('home')
   const [checkingAuth, setCheckingAuth] = useState(true)
   const [sidebarOpen, setSidebarOpen] = useState(true)
   const [student, setStudent] = useState<any>(null)
 
-  // Listen for deep-linked notification pathways inside the layout level
+  // Listen directly to Next.js live query parameters changes
   useEffect(() => {
-    if (typeof window === 'undefined') return
-
-    const parseTabFromUrl = () => {
-      const params = new URLSearchParams(window.location.search)
-      const tabParam = params.get('tab') as any
-
-      const validTabs = ['home', 'schedule', 'reports', 'locker', 'chat']
-      if (tabParam && validTabs.includes(tabParam)) {
-        setActiveTab(tabParam)
-      }
+    const tabParam = searchParams.get('tab') as TabType
+    const validTabs: TabType[] = ['home', 'schedule', 'reports', 'locker', 'chat', 'workspace']
+    
+    if (tabParam && validTabs.includes(tabParam)) {
+      setActiveTab(tabParam)
     }
-
-    parseTabFromUrl()
-
-    window.addEventListener('popstate', parseTabFromUrl)
-    return () => window.removeEventListener('popstate', parseTabFromUrl)
-  }, [])
+  }, [searchParams])
 
   useEffect(() => {
     let isMounted = true
@@ -82,6 +86,14 @@ export default function StudentDashboardLayout({ children }: { children: React.R
     }
   }, [router])
 
+  // 🎯 NEXT.JS NATIVE SYNCHRONIZATION: Pushes parameter strings cleanly without history lockups
+  const handleTabChange = (tab: TabType) => {
+    setActiveTab(tab)
+    const currentParams = new URLSearchParams(searchParams.toString())
+    currentParams.set('tab', tab)
+    router.push(`${pathname}?${currentParams.toString()}`)
+  }
+
   if (checkingAuth) {
     return (
       <div className="h-screen w-screen flex flex-col items-center justify-center text-slate-400 font-medium animate-pulse bg-slate-50 gap-2">
@@ -92,7 +104,7 @@ export default function StudentDashboardLayout({ children }: { children: React.R
   }
 
   return (
-    <StudentContext.Provider value={{ student, activeTab, setActiveTab }}>
+    <StudentContext.Provider value={{ student, activeTab, setActiveTab: handleTabChange }}>
       <div className="flex h-screen bg-slate-50 text-slate-900 overflow-hidden font-sans">
         
         {/* SIDEBAR NAVIGATION FRAMEWORK */}
@@ -109,11 +121,12 @@ export default function StudentDashboardLayout({ children }: { children: React.R
           </div>
 
           <nav className="flex-1 p-4 space-y-1">
-            <SidebarItem icon="🏠" label="Home Base" active={activeTab === 'home'} collapsed={!sidebarOpen} onClick={() => setActiveTab('home')} />
-            <SidebarItem icon="📅" label="My Schedule" active={activeTab === 'schedule'} collapsed={!sidebarOpen} onClick={() => setActiveTab('schedule')} />
-            <SidebarItem icon="📜" label="Progress Reports" active={activeTab === 'reports'} collapsed={!sidebarOpen} onClick={() => setActiveTab('reports')} />
-            <SidebarItem icon="📂" label="Locker Rooms" active={activeTab === 'locker'} collapsed={!sidebarOpen} onClick={() => setActiveTab('locker')} />
-            <SidebarItem icon="💬" label="Study Chat" active={activeTab === 'chat'} collapsed={!sidebarOpen} onClick={() => setActiveTab('chat')} />
+            <SidebarItem icon="🏠" label="Home Base" active={activeTab === 'home'} collapsed={!sidebarOpen} onClick={() => handleTabChange('home')} />
+            <SidebarItem icon="📅" label="My Schedule" active={activeTab === 'schedule'} collapsed={!sidebarOpen} onClick={() => handleTabChange('schedule')} />
+            <SidebarItem icon="📜" label="Progress Reports" active={activeTab === 'reports'} collapsed={!sidebarOpen} onClick={() => handleTabChange('reports')} />
+            <SidebarItem icon="💻" label="My Workspaces" active={activeTab === 'workspace'} collapsed={!sidebarOpen} onClick={() => handleTabChange('workspace')} />
+            <SidebarItem icon="📂" label="Locker Rooms" active={activeTab === 'locker'} collapsed={!sidebarOpen} onClick={() => handleTabChange('locker')} />
+            <SidebarItem icon="💬" label="Study Chat" active={activeTab === 'chat'} collapsed={!sidebarOpen} onClick={() => handleTabChange('chat')} />
           </nav>
 
           <div className="p-4 border-t border-slate-100">
@@ -135,13 +148,19 @@ export default function StudentDashboardLayout({ children }: { children: React.R
               </button>
               <h2 className="text-xs font-black uppercase tracking-widest text-slate-400">{activeTab} Deck</h2>
             </div>
-            <div className="text-right">
-              <p className="text-xs font-black text-slate-800">{student?.name || 'Academic Student'}</p>
-              <p className="text-[9px] font-bold text-blue-600 uppercase tracking-wider">{student?.grade || 'Enrolled Pro'}</p>
+            
+            <div className="flex items-center gap-4">
+              {student?.id && <NotificationCenter userId={student.id} />}
+
+              <div className="text-right">
+                <p className="text-xs font-black text-slate-800">{student?.name || 'Academic Student'}</p>
+                <p className="text-[9px] font-bold text-blue-600 uppercase tracking-wider">{student?.grade || 'Enrolled Pro'}</p>
+              </div>
             </div>
           </header>
 
-          <div className="p-8 flex-1 overflow-y-auto max-w-5xl w-full mx-auto">
+          {/* 🎯 TARGET TARGET MOUNT SLOT: Equipped with portal ID injection framework */}
+          <div className="p-8 flex-1 overflow-y-auto max-w-5xl w-full mx-auto" id="student-main-viewport">
             {children}
           </div>
         </main>

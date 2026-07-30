@@ -196,3 +196,1033 @@ also i dont want doubl click for selet just one click does.. it  -
 
 
 please do veting do notmssout evenone of the above..
+
+
+
+
+
+
+
+
+
+"use client"
+
+import React, { useEffect, useRef, useState } from 'react'
+import { supabase } from '@/lib/supabase'
+
+interface WhiteboardProps {
+  roomId: string
+  folderPath: string 
+  isReadOnly?: boolean
+}
+
+type Tool = 'select' | 'move' | 'brush' | 'laser' | 'shape' | 'text'
+type SelectionType = 'object' | 'lasso'
+type BrushSubTool = 'pen' | 'marker' | 'highlighter' | 'eraser'
+type ShapeType = 'rectangle' | 'oval' | 'triangle' | 'line'
+
+interface VectorElement {
+  id: string
+  type: 'stroke' | 'shape' | 'image' | 'text'
+  subTool?: BrushSubTool
+  shapeType?: ShapeType
+  points?: { x: number; y: number }[]
+  x: number
+  y: number
+  width: number
+  height: number
+  color: string
+  lineWidth: number
+  rotation: number 
+  src?: string
+  textValue?: string
+  fontSize?: number
+  fontStyle?: string 
+}
+
+interface LaserPoint {
+  x: number;
+  y: number;
+  time: number;
+}
+
+export default function Whiteboard({ roomId, folderPath, isReadOnly = false }: WhiteboardProps) {
+  const containerRef = useRef<HTMLDivElement | null>(null)
+  const canvasRef = useRef<HTMLCanvasElement | null>(null)
+  const channelRef = useRef<any>(null)
+
+  // Layout Engine States
+  const [activeTool, setActiveTool] = useState<Tool>('select')
+  const [selectionMode, setSelectionMode] = useState<SelectionType>('object')
+  const [activeBrush, setActiveBrush] = useState<BrushSubTool>('pen')
+  const [activeShape, setActiveShape] = useState<ShapeType>('rectangle')
+  const [activeMenu, setActiveMenu] = useState<Tool | null>(null)
+
+  // Contextual Subtool States
+  const [color, setColor] = useState('#000000')
+  const [lineWidth, setLineWidth] = useState(3)
+  const [fontSize, setFontSize] = useState(24)
+  const [fontStyle, setFontStyle] = useState<'normal' | 'bold' | 'italic'>('normal')
+
+  // Canvas Workspace Transform Coordinates
+  const [scale, setScale] = useState(1)
+  const [pan, setPan] = useState({ x: 0, y: 0 })
+
+  // Core Graphic Registries
+  const [elements, setElements] = useState<VectorElement[]>([])
+  const [selectedIds, setSelectedIds] = useState<string[]>([])
+  const [clipboard, setClipboard] = useState<VectorElement[] | null>(null)
+  const [isSaving, setIsSaving] = useState(false)
+
+  // Inline Interactive Text Overlay Config
+  const [textInputConfig, setTextInputConfig] = useState<{ x: number; y: number; worldX: number; worldY: number } | null>(null)
+  const [liveTextValue, setLiveTextValue] = useState("")
+
+  // Interaction Mechanics Hooks
+  const [isInteracting, setIsInteracting] = useState(false)
+  const [interactionMode, setInteractionMode] = useState<'draw' | 'pan' | 'transform' | 'lasso' | 'none'>('none')
+  const [transformHandle, setTransformHandle] = useState<string | null>(null) 
+  const [laserPaths, setLaserPaths] = useState<LaserPoint[][]>([])
+  const [lassoPoints, setLassoPoints] = useState<{ x: number; y: number }[]>([])
+  
+  // Realtime Teacher and Student Laser Pointer Sync Trackers
+  const [localLaserPos, setLocalLaserPos] = useState<{ x: number; y: number } | null>(null)
+  const [remoteLaserPointer, setRemoteLaserPointer] = useState<{ x: number; y: number; roomId: string } | null>(null)
+
+  const imageCache = useRef<Map<string, HTMLImageElement>>(new Map())
+  const startTrackPos = useRef({ x: 0, y: 0 })
+  const startPanOffset = useRef({ x: 0, y: 0 })
+  const initialElementsState = useRef<Map<string, { x: number; y: number; width: number; height: number; rotation: number }>>(new Map())
+  const activeElementId = useRef<string | null>(null)
+
+  // Initialization Hook Loop Hub
+  useEffect(() => {
+    const canvas = canvasRef.current
+    if (!canvas) return
+
+    const handleResize = () => {
+      if (!containerRef.current || !canvas) return
+      canvas.width = containerRef.current.clientWidth
+      canvas.height = containerRef.current.clientHeight
+      renderScene()
+    }
+
+    window.addEventListener('resize', handleResize)
+    handleResize()
+
+    if (!isReadOnly) {
+      const channel = supabase.channel(`room_matrix_v3:${roomId}`, {
+        config: { broadcast: { self: false } }
+      })
+
+      channel
+        .on('broadcast', { event: 'sync_elements' }, ({ payload }) => {
+          setElements(payload.elements)
+          payload.elements.forEach((el: VectorElement) => {
+            if (el.type === 'image' && el.src && !imageCache.current.has(el.src)) {
+              const img = new Image()
+              img.src = el.src
+              img.onload = () => renderScene()
+              imageCache.current.set(el.src, img)
+            }
+          })
+        })
+        .on('broadcast', { event: 'laser_track' }, ({ payload }) => {
+          setLaserPaths(prev => [...prev, payload.points])
+        })
+        .on('broadcast', { event: 'laser_pointer_move' }, ({ payload }) => {
+          setRemoteLaserPointer(payload.pointer)
+        })
+        .subscribe()
+
+      channelRef.current = channel
+      return () => {
+        window.removeEventListener('resize', handleResize)
+        supabase.removeChannel(channel)
+      }
+    }
+  }, [roomId, isReadOnly])
+
+  // 2-Second Decay Interval Engine loop
+  useEffect(() => {
+    const interval = setInterval(() => {
+      const now = Date.now()
+      setLaserPaths(prev => {
+        const next = prev.map(path => path.filter(p => now - p.time < 2000)).filter(p => p.length > 0)
+        return JSON.stringify(next) !== JSON.stringify(prev) ? next : prev
+      })
+      if (remoteLaserPointer && Date.now() - (laserPaths[laserPaths.length - 1]?.[0]?.time || 0) > 3000) {
+        setRemoteLaserPointer(null)
+      }
+    }, 60)
+    return () => clearInterval(interval)
+  }, [laserPaths, remoteLaserPointer])
+
+  useEffect(() => { renderScene() }, [elements, scale, pan, selectedIds, laserPaths, lassoPoints, remoteLaserPointer, localLaserPos])
+
+  const broadcastState = (updatedList: VectorElement[]) => {
+    if (channelRef.current) {
+      channelRef.current.send({
+        type: 'broadcast',
+        event: 'sync_elements',
+        payload: { elements: updatedList }
+      })
+    }
+  }
+
+  const getScreenToWorld = (screenX: number, screenY: number) => {
+    const rect = canvasRef.current!.getBoundingClientRect()
+    return {
+      x: (screenX - rect.left - pan.x) / scale,
+      y: (screenY - rect.top - pan.y) / scale
+    }
+  }
+
+  const getElementAtPosition = (worldX: number, worldY: number): VectorElement | null => {
+    for (let i = elements.length - 1; i >= 0; i--) {
+      const el = elements[i]
+      const cx = el.x + el.width / 2
+      const cy = el.y + el.height / 2
+      const rad = (-el.rotation * Math.PI) / 180
+      const rx = (worldX - cx) * Math.cos(rad) - (worldY - cy) * Math.sin(rad) + cx
+      const ry = (worldX - cx) * Math.sin(rad) + (worldY - cy) * Math.cos(rad) + cy
+
+      if (el.type === 'shape' || el.type === 'image' || el.type === 'text') {
+        const left = Math.min(el.x, el.x + el.width)
+        const right = Math.max(el.x, el.x + el.width)
+        const top = Math.min(el.y, el.y + el.height)
+        const bottom = Math.max(el.y, el.y + el.height)
+        if (rx >= left && rx <= right && ry >= top && ry <= bottom) return el
+      } else if (el.type === 'stroke' && el.points) {
+        for (const p of el.points) {
+          const dist = Math.sqrt(Math.pow(p.x - worldX, 2) + Math.pow(p.y - worldY, 2))
+          if (dist < el.lineWidth + 6) return el
+        }
+      }
+    }
+    return null
+  }
+
+  const getTransformHandle = (worldX: number, worldY: number, el: VectorElement): string | null => {
+    const cx = el.x + el.width / 2
+    const cy = el.y + el.height / 2
+    const rad = (-el.rotation * Math.PI) / 180
+    const rx = (worldX - cx) * Math.cos(rad) - (worldY - cy) * Math.sin(rad) + cx
+    const ry = (worldX - cx) * Math.sin(rad) + (worldY - cy) * Math.cos(rad) + cy
+
+    const hs = 8 / scale 
+    const x1 = el.x, x2 = el.x + el.width, y1 = el.y, y2 = el.y + el.height
+
+    if (Math.abs(rx - x1) < hs && Math.abs(ry - y1) < hs) return 'nw'
+    if (Math.abs(rx - x2) < hs && Math.abs(ry - y1) < hs) return 'ne'
+    if (Math.abs(rx - x2) < hs && Math.abs(ry - y2) < hs) return 'se'
+    if (Math.abs(rx - x1) < hs && Math.abs(ry - y2) < hs) return 'sw'
+
+    const rStemX = el.x + el.width / 2
+    const rStemY = el.y - 30 / scale
+    if (Math.sqrt(Math.pow(rx - rStemX, 2) + Math.pow(ry - rStemY, 2)) < hs * 1.5) return 'rot'
+
+    return null
+  }
+
+  const isElementInsideLasso = (lasso: { x: number; y: number }[], el: VectorElement): boolean => {
+    if (lasso.length < 3) return false
+    const targetX = el.x + el.width / 2
+    const targetY = el.y + el.height / 2
+    let inside = false
+    for (let i = 0, j = lasso.length - 1; i < lasso.length; j = i++) {
+      const xi = lasso[i].x, yi = lasso[i].y
+      const xj = lasso[j].x, yj = lasso[j].y
+      const intersect = ((yi > targetY) !== (yj > targetY)) && (targetX < (xj - xi) * (targetY - yi) / (yj - yi) + xi)
+      if (intersect) inside = !inside
+    }
+    return inside
+  }
+
+  const renderScene = () => {
+    const canvas = canvasRef.current
+    const ctx = canvas?.getContext('2d')
+    if (!canvas || !ctx) return
+
+    ctx.clearRect(0, 0, canvas.width, canvas.height)
+    ctx.save()
+    ctx.setTransform(scale, 0, 0, scale, pan.x, pan.y)
+
+    elements.forEach(el => {
+      ctx.save()
+      const cx = el.x + el.width / 2
+      const cy = el.y + el.height / 2
+      ctx.translate(cx, cy)
+      ctx.rotate((el.rotation * Math.PI) / 180)
+      ctx.translate(-cx, -cy)
+
+      ctx.strokeStyle = el.color
+      ctx.fillStyle = el.color
+      ctx.lineWidth = el.lineWidth
+      ctx.lineCap = 'round'
+      ctx.lineJoin = 'round'
+
+      // Apply High-Visibility Neon Glow Layer if selected
+      if (selectedIds.includes(el.id)) {
+        ctx.shadowColor = '#248cee'
+        ctx.shadowBlur = 14
+      }
+
+      if (el.type === 'stroke' && el.points) {
+        if (el.subTool === 'highlighter') {
+          ctx.globalAlpha = 0.4
+          ctx.globalCompositeOperation = 'multiply'
+        }
+        ctx.beginPath()
+        if (el.points.length > 0) {
+          ctx.moveTo(el.points[0].x, el.points[0].y)
+          el.points.forEach(p => ctx.lineTo(p.x, p.y))
+        }
+        ctx.stroke()
+      } else if (el.type === 'shape') {
+        if (el.shapeType === 'rectangle') ctx.strokeRect(el.x, el.y, el.width, el.height)
+        else if (el.shapeType === 'oval') {
+          ctx.beginPath()
+          ctx.ellipse(cx, cy, Math.abs(el.width / 2), Math.abs(el.height / 2), 0, 0, 2 * Math.PI)
+          ctx.stroke()
+        } else if (el.shapeType === 'triangle') {
+          ctx.beginPath()
+          ctx.moveTo(el.x + el.width / 2, el.y)
+          ctx.lineTo(el.x, el.y + el.height)
+          ctx.lineTo(el.x + el.width, el.y + el.height)
+          ctx.closePath()
+          ctx.stroke()
+        } else if (el.shapeType === 'line') {
+          ctx.beginPath()
+          ctx.moveTo(el.x, el.y)
+          ctx.lineTo(el.x + el.width, el.y + el.height)
+          ctx.stroke()
+        }
+      } else if (el.type === 'image' && el.src) {
+        const cachedImg = imageCache.current.get(el.src)
+        if (cachedImg && cachedImg.complete) {
+          ctx.drawImage(cachedImg, el.x, el.y, el.width, el.height)
+        }
+      } else if (el.type === 'text' && el.textValue) {
+        ctx.font = `${el.fontStyle || 'normal'} ${el.fontSize || 16}px sans-serif`
+        ctx.textBaseline = 'top'
+        ctx.fillText(el.textValue, el.x, el.y)
+      }
+      ctx.restore()
+    })
+
+    // Render Laser Lines paths
+    laserPaths.forEach(path => {
+      if (path.length < 2) return
+      ctx.save()
+      ctx.strokeStyle = '#248cee'
+      ctx.lineWidth = 4
+      ctx.lineCap = 'round'
+      ctx.lineJoin = 'round'
+      ctx.shadowColor = '#248cee'
+      ctx.shadowBlur = 8
+      ctx.beginPath()
+      ctx.moveTo(path[0].x, path[0].y)
+      path.forEach(p => ctx.lineTo(p.x, p.y))
+      ctx.stroke()
+      ctx.restore()
+    })
+
+    // Render Realtime Teacher/Local Laser Point Tracker dot
+    if (activeTool === 'laser' && localLaserPos) {
+      ctx.save()
+      ctx.fillStyle = '#248cee'
+      ctx.shadowColor = '#248cee'
+      ctx.shadowBlur = 16
+      ctx.beginPath()
+      ctx.arc(localLaserPos.x, localLaserPos.y, 7, 0, 2 * Math.PI)
+      ctx.fill()
+      ctx.restore()
+    }
+
+    // Render Remote Student laser pointer sync nodes
+    if (remoteLaserPointer) {
+      ctx.save()
+      ctx.fillStyle = '#ee2424'
+      ctx.shadowColor = '#ee2424'
+      ctx.shadowBlur = 16
+      ctx.beginPath()
+      ctx.arc(remoteLaserPointer.x, remoteLaserPointer.y, 7, 0, 2 * Math.PI)
+      ctx.fill()
+      ctx.restore()
+    }
+
+    // Render Dynamic Lasso dash strokes
+    if (lassoPoints.length > 1) {
+      ctx.save()
+      ctx.strokeStyle = '#3b82f6'
+      ctx.lineWidth = 1.5 / scale
+      ctx.setLineDash([4, 4])
+      ctx.beginPath()
+      ctx.moveTo(lassoPoints[0].x, lassoPoints[0].y)
+      lassoPoints.forEach(p => ctx.lineTo(p.x, p.y))
+      ctx.stroke()
+      ctx.restore()
+    }
+
+    // Render Transformation bounding widgets box
+    selectedIds.forEach(id => {
+      const match = elements.find(e => e.id === id)
+      if (!match) return
+      ctx.save()
+      const cx = match.x + match.width / 2
+      const cy = match.y + match.height / 2
+      ctx.translate(cx, cy)
+      ctx.rotate((match.rotation * Math.PI) / 180)
+      ctx.translate(-cx, -cy)
+
+      ctx.strokeStyle = '#3b82f6'
+      ctx.lineWidth = 1.5 / scale
+      ctx.strokeRect(match.x, match.y, match.width, match.height)
+
+      ctx.fillStyle = '#ffffff'
+      const hs = 8 / scale
+      const bounds = [
+        { x: match.x, y: match.y },
+        { x: match.x + match.width, y: match.y },
+        { x: match.x + match.width, y: match.y + match.height },
+        { x: match.x, y: match.y + match.height }
+      ]
+      bounds.forEach(b => {
+        ctx.fillRect(b.x - hs / 2, b.y - hs / 2, hs, hs)
+        ctx.strokeRect(b.x - hs / 2, b.y - hs / 2, hs, hs)
+      })
+
+      ctx.beginPath()
+      ctx.moveTo(match.x + match.width / 2, match.y)
+      ctx.lineTo(match.x + match.width / 2, match.y - 30 / scale)
+      ctx.stroke()
+      ctx.beginPath()
+      ctx.arc(match.x + match.width / 2, match.y - 30 / scale, 4 / scale, 0, 2 * Math.PI)
+      ctx.fill()
+      ctx.stroke()
+      ctx.restore()
+    })
+    ctx.restore()
+  }
+
+  const handleMouseDown = (e: React.MouseEvent<HTMLCanvasElement>) => {
+    if (isReadOnly) return
+    
+    // Commit any active open floating input states cleanly if clicking away
+    if (textInputConfig) {
+      commitInlineTextElement()
+      return
+    }
+
+    setIsInteracting(true)
+    startTrackPos.current = { x: e.clientX, y: e.clientY }
+    const world = getScreenToWorld(e.clientX, e.clientY)
+
+    if (activeTool === 'move') {
+      setInteractionMode('pan')
+      startPanOffset.current = { x: pan.x, y: pan.y }
+      return
+    }
+
+    if (activeTool === 'select') {
+      if (selectionMode === 'lasso') {
+        setInteractionMode('lasso')
+        setLassoPoints([world])
+        return
+      }
+
+      if (selectedIds.length === 1) {
+        const el = elements.find(item => item.id === selectedIds[0])
+        if (el) {
+          const handle = getTransformHandle(world.x, world.y, el)
+          if (handle) {
+            setInteractionMode('transform')
+            setTransformHandle(handle)
+            initialElementsState.current.clear()
+            initialElementsState.current.set(el.id, { x: el.x, y: el.y, width: el.width, height: el.height, rotation: el.rotation })
+            return
+          }
+        }
+      }
+
+      const hit = getElementAtPosition(world.x, world.y)
+      if (hit) {
+        setInteractionMode('transform')
+        setTransformHandle('move')
+        const nextIds = selectedIds.includes(hit.id) ? selectedIds : [hit.id]
+        setSelectedIds(nextIds)
+        
+        initialElementsState.current.clear()
+        nextIds.forEach(id => {
+          const el = elements.find(item => item.id === id)
+          if (el) initialElementsState.current.set(el.id, { x: el.x, y: el.y, width: el.width, height: el.height, rotation: el.rotation })
+        })
+      } else {
+        setSelectedIds([])
+        setInteractionMode('none')
+      }
+      return
+    }
+
+    if (activeTool === 'brush') {
+      if (activeBrush === 'eraser') {
+        const hit = getElementAtPosition(world.x, world.y)
+        if (hit) {
+          const nextEls = elements.filter(item => item.id !== hit.id)
+          setElements(nextEls)
+          broadcastState(nextEls)
+        }
+        return
+      }
+
+      setInteractionMode('draw')
+      const newStroke: VectorElement = {
+        id: `stroke_${Date.now()}`,
+        type: 'stroke',
+        subTool: activeBrush,
+        x: world.x,
+        y: world.y,
+        width: 0,
+        height: 0,
+        color: color,
+        lineWidth: activeBrush === 'marker' ? lineWidth * 2.5 : lineWidth,
+        rotation: 0,
+        points: [world]
+      }
+      activeElementId.current = newStroke.id
+      setElements(prev => [...prev, newStroke])
+      return
+    }
+
+    if (activeTool === 'laser') {
+      setInteractionMode('draw')
+      const p = { x: world.x, y: world.y, time: Date.now() }
+      setLaserPaths(prev => [...prev, [p]])
+      setLocalLaserPos({ x: world.x, y: world.y })
+      if (channelRef.current) {
+        channelRef.current.send({ type: 'broadcast', event: 'laser_pointer_move', payload: { pointer: { x: world.x, y: world.y, roomId } } })
+      }
+      return
+    }
+
+    if (activeTool === 'shape') {
+      setInteractionMode('draw')
+      const newShape: VectorElement = {
+        id: `shape_${Date.now()}`,
+        type: 'shape',
+        shapeType: activeShape,
+        x: world.x,
+        y: world.y,
+        width: 0,
+        height: 0,
+        color: color,
+        lineWidth: lineWidth,
+        rotation: 0
+      }
+      activeElementId.current = newShape.id
+      setElements(prev => [...prev, newShape])
+      return
+    }
+
+    if (activeTool === 'text') {
+      const rect = canvasRef.current!.getBoundingClientRect()
+      setTextInputConfig({
+        x: e.clientX - rect.left,
+        y: e.clientY - rect.top,
+        worldX: world.x,
+        worldY: world.y
+      })
+      setLiveTextValue("")
+    }
+  }
+
+  const handleMouseMove = (e: React.MouseEvent<HTMLCanvasElement>) => {
+    const world = getScreenToWorld(e.clientX, e.clientY)
+
+    if (activeTool === 'laser') {
+      setLocalLaserPos({ x: world.x, y: world.y })
+      if (channelRef.current) {
+        channelRef.current.send({ type: 'broadcast', event: 'laser_pointer_move', payload: { pointer: { x: world.x, y: world.y, roomId } } })
+      }
+    }
+
+    if (!isInteracting || isReadOnly) return
+    const dx = (e.clientX - startTrackPos.current.x) / scale
+    const dy = (e.clientY - startTrackPos.current.y) / scale
+
+    if (interactionMode === 'pan') {
+      setPan({
+        x: startPanOffset.current.x + (e.clientX - startTrackPos.current.x),
+        y: startPanOffset.current.y + (e.clientY - startTrackPos.current.y)
+      })
+      return
+    }
+
+    if (interactionMode === 'lasso') {
+      setLassoPoints(prev => [...prev, world])
+      return
+    }
+
+    if (interactionMode === 'transform' && selectedIds.length > 0) {
+      setElements(prev => prev.map(el => {
+        if (!selectedIds.includes(el.id)) return el
+        const init = initialElementsState.current.get(el.id)
+        if (!init) return el
+
+        if (transformHandle === 'move') {
+          return { ...el, x: init.x + dx, y: init.y + dy }
+        }
+        if (transformHandle === 'se') {
+          let nw = init.width + dx, nh = init.height + dy
+          if (e.shiftKey) { const max = Math.max(nw, nh); nw = max; nh = max; }
+          return { ...el, width: Math.max(12, nw), height: Math.max(12, nh) }
+        }
+        if (transformHandle === 'sw') {
+          return { ...el, x: init.x + dx, width: Math.max(12, init.width - dx), height: Math.max(12, init.height + dy) }
+        }
+        if (transformHandle === 'ne') {
+          return { ...el, y: init.y + dy, width: Math.max(12, init.width + dx), height: Math.max(12, init.height - dy) }
+        }
+        if (transformHandle === 'nw') {
+          return { ...el, x: init.x + dx, y: init.y + dy, width: Math.max(12, init.width - dx), height: Math.max(12, init.height - dy) }
+        }
+        if (transformHandle === 'rot') {
+          const cx = init.x + init.width / 2
+          const cy = init.y + init.height / 2
+          const targetAngle = Math.atan2(world.y - cy, world.x - cx) * (180 / Math.PI) - 90
+          return { ...el, rotation: targetAngle }
+        }
+        return el
+      }))
+      return
+    }
+
+    if (interactionMode === 'draw') {
+      if (activeTool === 'brush' && activeElementId.current) {
+        setElements(prev => prev.map(item => {
+          if (item.id !== activeElementId.current) return item
+          return { ...item, points: [...(item.points || []), world] }
+        }))
+        return
+      }
+
+      if (activeTool === 'laser') {
+        const p = { x: world.x, y: world.y, time: Date.now() }
+        setLaserPaths(prev => {
+          const next = [...prev]
+          if (next.length > 0) {
+            next[next.length - 1] = [...next[next.length - 1], p]
+            if (channelRef.current) {
+              channelRef.current.send({ type: 'broadcast', event: 'laser_track', payload: { points: next[next.length - 1] } })
+            }
+          }
+          return next
+        })
+        return
+      }
+
+      if (activeTool === 'shape' && activeElementId.current) {
+        setElements(prev => prev.map(item => {
+          if (item.id !== activeElementId.current) return item
+          let w = dx, h = dy
+          if (e.shiftKey || activeShape === 'rectangle' && e.shiftKey || activeShape === 'oval' && e.shiftKey) {
+            const max = Math.max(Math.abs(w), Math.abs(h))
+            w = w >= 0 ? max : -max
+            h = h >= 0 ? max : -max
+          }
+          return { ...item, width: w, height: h }
+        }))
+      }
+    }
+  }
+
+  const handleMouseUp = (e: React.MouseEvent<HTMLCanvasElement>) => {
+    if (!isInteracting) return
+    setIsInteracting(false)
+
+    // LASSO TRANSFORM BACK TO STANDARD OBJECT DRAGGING ON RELEASE
+    if (interactionMode === 'lasso' && lassoPoints.length > 2) {
+      const insideIds = elements.filter(el => isElementInsideLasso(lassoPoints, el)).map(el => el.id)
+      setSelectedIds(insideIds)
+      
+      if (insideIds.length > 0) {
+        setSelectionMode('object') // Flip selection tool toggle back to standard translate mode
+        initialElementsState.current.clear()
+        insideIds.forEach(id => {
+          const el = elements.find(item => item.id === id)
+          if (el) initialElementsState.current.set(el.id, { x: el.x, y: el.y, width: el.width, height: el.height, rotation: el.rotation })
+        })
+      }
+    }
+
+    setLassoPoints([])
+    setTransformHandle(null)
+    setInteractionMode('none')
+    activeElementId.current = null
+    broadcastState(elements)
+    renderScene()
+  }
+
+  // Live Vector Text Ingestion Element Parser Function
+  const commitInlineTextElement = () => {
+    if (!textInputConfig || !liveTextValue.trim()) {
+      setTextInputConfig(null)
+      return
+    }
+    const newTxt: VectorElement = {
+      id: `text_${Date.now()}`,
+      type: 'text',
+      x: textInputConfig.worldX,
+      y: textInputConfig.worldY,
+      width: liveTextValue.length * (fontSize * 0.5),
+      height: fontSize * 1.3,
+      color: color,
+      lineWidth: 1,
+      rotation: 0,
+      textValue: liveTextValue,
+      fontSize: fontSize,
+      fontStyle: fontStyle
+    }
+    const nextEls = [...elements, newTxt]
+    setElements(nextEls)
+    broadcastState(nextEls)
+    setTextInputConfig(null)
+    setLiveTextValue("")
+  }
+
+  const handleFileDrop = (e: React.DragEvent) => {
+    e.preventDefault()
+    const file = e.dataTransfer.files[0]
+    if (!file || !file.type.startsWith('image/')) return
+
+    const reader = new FileReader()
+    reader.onload = () => {
+      const img = new Image()
+      img.src = reader.result as string
+      img.onload = () => {
+        const world = getScreenToWorld(e.clientX, e.clientY)
+        const standardWidth = 240 / scale
+        const standardHeight = (img.height * (240 / img.width)) / scale
+
+        const newImg: VectorElement = {
+          id: `img_${Date.now()}`,
+          type: 'image',
+          x: world.x - standardWidth / 2,
+          y: world.y - standardHeight / 2,
+          width: standardWidth,
+          height: standardHeight,
+          rotation: 0,
+          color: 'transparent',
+          lineWidth: 0,
+          src: img.src
+        }
+
+        imageCache.current.set(img.src, img)
+        const updated = [...elements, newImg]
+        setElements(updated)
+        broadcastState(updated)
+        renderScene()
+      }
+    }
+    reader.readAsDataURL(file)
+  }
+
+  const handleCut = () => {
+    if (selectedIds.length === 0) return
+    const cutTargets = elements.filter(el => selectedIds.includes(el.id))
+    setClipboard(cutTargets)
+    const nextEls = elements.filter(el => !selectedIds.includes(el.id))
+    setElements(nextEls)
+    setSelectedIds([])
+    broadcastState(nextEls)
+  }
+
+  const handleCopy = () => {
+    if (selectedIds.length === 0) return
+    const copyTargets = elements.filter(el => selectedIds.includes(el.id))
+    setClipboard(copyTargets)
+  }
+
+  const handlePaste = () => {
+    if (!clipboard) return
+    const pasted: VectorElement[] = clipboard.map(item => ({
+      ...item,
+      id: `${item.id}_p_${Date.now()}`,
+      x: item.x + 25 / scale,
+      y: item.y + 25 / scale
+    }))
+    pasted.forEach(el => {
+      if (el.type === 'image' && el.src) {
+        const img = new Image()
+        img.src = el.src
+        imageCache.current.set(el.src, img)
+      }
+    })
+    const nextEls = [...elements, ...pasted]
+    setElements(nextEls)
+    setSelectedIds(pasted.map(el => el.id))
+    broadcastState(nextEls)
+  }
+
+  const handleDelete = () => {
+    if (selectedIds.length === 0) return
+    const nextEls = elements.filter(el => !selectedIds.includes(el.id))
+    setElements(nextEls)
+    setSelectedIds([])
+    broadcastState(nextEls)
+  }
+
+  const handleClearAll = () => {
+    if (isReadOnly || !window.confirm("Clear all whiteboard layout matrices data?")) return
+    setElements([])
+    setSelectedIds([])
+    broadcastState([])
+  }
+
+  const saveWhiteboardSnapshot = async () => {
+    const canvas = canvasRef.current
+    if (!canvas) return
+    setIsSaving(true)
+
+    canvas.toBlob(async (blob) => {
+      if (!blob) {
+        setIsSaving(false)
+        return
+      }
+      const dateStr = new Date().toISOString().replace(/[:.]/g, '-')
+      const fileName = `Whiteboard_${dateStr}.png`
+      const fullPath = `${folderPath}/${fileName}`
+
+      const { error } = await supabase.storage
+        .from('classroom-files')
+        .upload(fullPath, blob, { contentType: 'image/png', upsert: true })
+
+      if (error) alert("Storage interface save fail: " + error.message)
+      else alert(`Snapshot saved securely: "${fileName}"`)
+      setIsSaving(false)
+    }, 'image/png')
+  }
+
+  // Dynamic CSS Cursor Pointer System Resolver Map Matrix
+  const getPointerCursorStyle = () => {
+    if (activeTool === 'move') return 'cursor-grab active:cursor-grabbing'
+    if (activeTool === 'laser') return 'cursor-none' // Handled via canvas vector rendering pipeline layers
+    if (activeTool === 'text') return 'cursor-text'
+    if (activeTool === 'shape') return 'cursor-crosshair'
+    if (activeTool === 'brush') {
+      return activeBrush === 'eraser' 
+        ? `url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='24' height='24' viewBox='0 0 24 24' fill='none' stroke='%2364748b' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'><rect x='3' y='3' width='18' height='18' rx='2' ry='2'/></svg>") 12 12, cell`
+        : `url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='24' height='24' viewBox='0 0 24 24' fill='none' stroke='%233b82f6' stroke-width='2.5' stroke-linecap='round' stroke-linejoin='round'><path d='M12 20h9'/><path d='M16.5 3.5a2.121 2.121 0 0 1 3 3L7 19l-4 1 1-4L16.5 3.5z'/></svg>") 0 20, crosshair`
+    }
+    return 'cursor-default'
+  }
+
+  return (
+    <div 
+      ref={containerRef}
+      className="w-full h-full flex flex-col bg-white border border-slate-200 rounded-2xl overflow-hidden shadow-sm relative"
+      onDragOver={(e) => e.preventDefault()}
+      onDrop={handleFileDrop}
+    >
+      {/* Top Standard Command Utility Operations Center Strip */}
+      <div className="bg-slate-50 border-b border-slate-200 px-4 py-2.5 flex items-center justify-between gap-4 z-20">
+        <div className="flex items-center gap-1 bg-white border border-slate-200 p-1 rounded-xl shadow-xs">
+          <button onClick={handleCut} disabled={selectedIds.length === 0} className="px-2.5 py-1.5 text-xs font-bold text-slate-600 hover:bg-slate-50 rounded-lg disabled:opacity-40 transition">✂️ Cut</button>
+          <button onClick={handleCopy} disabled={selectedIds.length === 0} className="px-2.5 py-1.5 text-xs font-bold text-slate-600 hover:bg-slate-50 rounded-lg disabled:opacity-40 transition">📋 Copy</button>
+          <button onClick={handlePaste} disabled={!clipboard} className="px-2.5 py-1.5 text-xs font-bold text-slate-600 hover:bg-slate-50 rounded-lg disabled:opacity-40 transition">📥 Paste</button>
+          <button onClick={handleDelete} disabled={selectedIds.length === 0} className="px-2.5 py-1.5 text-xs font-bold text-red-600 hover:bg-red-50 rounded-lg disabled:opacity-40 transition">🗑️ Delete</button>
+        </div>
+
+        <div className="flex items-center gap-2">
+          <button onClick={handleClearAll} className="px-2.5 py-1.5 text-xs font-bold text-slate-500 hover:text-red-600 transition">Clear All Workspace</button>
+          <button 
+            onClick={saveWhiteboardSnapshot} 
+            disabled={isSaving}
+            className="px-3 py-1.5 text-xs bg-blue-600 hover:bg-blue-700 text-white rounded-lg font-bold shadow-xs transition disabled:bg-slate-300"
+          >
+            {isSaving ? 'Saving Snapshot...' : 'Save Snapshot'}
+          </button>
+        </div>
+      </div>
+
+      {/* Main Vector Stage Viewport Wrapper Layer */}
+      <div className={`flex-1 relative bg-slate-50 overflow-hidden ${getPointerCursorStyle()}`}>
+        <canvas
+          ref={canvasRef}
+          onMouseDown={handleMouseDown}
+          onMouseMove={handleMouseMove}
+          onMouseUp={handleMouseUp}
+          onMouseLeave={handleMouseUp}
+          className="absolute inset-0 w-full h-full block"
+        />
+
+        {/* FIGMA/PHOTOSHOP STYLE INLINE INTERACTIVE LIVE FLOATING TEXT INPUT BOX OVERLAY */}
+        {textInputConfig && (
+          <textarea
+            autoFocus
+            value={liveTextValue}
+            onChange={(e) => setLiveTextValue(e.target.value)}
+            onBlur={commitInlineTextElement}
+            onKeyDown={(e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); commitInlineTextElement(); } }}
+            style={{
+              position: 'absolute',
+              left: textInputConfig.x,
+              top: textInputConfig.y,
+              font: `${fontStyle} ${fontSize * scale}px sans-serif`,
+              color: color,
+              background: 'rgba(243, 244, 246, 0.9)',
+              border: '1px solid #3b82f6',
+              borderRadius: '4px',
+              outline: 'none',
+              padding: '4px',
+              resize: 'both',
+              minWidth: '160px',
+              zIndex: 50
+            }}
+          />
+        )}
+
+        {/* Dynamic Context Tool Menu Popups Matrix mapping layouts */}
+        {activeMenu && (
+          <div className="absolute bottom-24 left-1/2 -translate-x-1/2 bg-white border border-slate-200 p-3 rounded-2xl shadow-xl z-30 flex flex-col gap-2.5 transition-all animate-in fade-in slide-in-from-bottom-2 min-w-[260px]">
+            {activeMenu === 'select' && (
+              <div className="flex flex-col gap-1.5">
+                <span className="text-[10px] font-black uppercase text-slate-400 tracking-wider px-1">Selection Settings</span>
+                <div className="flex gap-1 bg-slate-50 p-1 rounded-xl">
+                  <button onClick={() => setSelectionMode('object')} className={`flex-1 py-1 text-xs font-bold rounded-lg transition ${selectionMode === 'object' ? 'bg-white shadow-xs text-blue-600' : 'text-slate-600'}`}>Object Mode</button>
+                  <button onClick={() => setSelectionMode('lasso')} className={`flex-1 py-1 text-xs font-bold rounded-lg transition ${selectionMode === 'lasso' ? 'bg-white shadow-xs text-blue-600' : 'text-slate-600'}`}>Lasso Mode</button>
+                </div>
+              </div>
+            )}
+
+            {activeMenu === 'brush' && (
+              <div className="flex flex-col gap-2">
+                <div className="flex gap-1 bg-slate-50 p-1 rounded-xl">
+                  {(['pen', 'marker', 'highlighter', 'eraser'] as BrushSubTool[]).map((b) => (
+                    <button key={b} onClick={() => { setActiveBrush(b); if(b==='eraser') setActiveMenu(null); }} className={`flex-1 py-1 text-xs font-bold rounded-lg capitalize transition ${activeBrush === b ? 'bg-white shadow-xs text-blue-600' : 'text-slate-600'}`}>{b}</button>
+                  ))}
+                </div>
+                {activeBrush !== 'eraser' && (
+                  <div className="flex flex-col gap-2 border-t border-slate-100 pt-2 px-1">
+                    <div className="flex items-center justify-between gap-4 text-xs font-bold text-slate-500">
+                      <span>Stroke Weight: {lineWidth}px</span>
+                      <input type="range" min="1" max="15" value={lineWidth} onChange={(e) => setLineWidth(Number(e.target.value))} className="w-24 accent-blue-600" />
+                    </div>
+                    <div className="flex gap-1.5 justify-center mt-1">
+                      {['#000000', '#ee2424', '#248cee', '#24ee59', '#facc15'].map((c) => (
+                        <button key={c} onClick={() => setColor(c)} className={`w-5 h-5 rounded-md ${color === c ? 'ring-2 ring-offset-2 ring-blue-600' : ''}`} style={{ backgroundColor: c }} />
+                      ))}
+                    </div>
+                  </div>
+                )}
+              </div>
+            )}
+
+            {activeMenu === 'shape' && (
+              <div className="flex flex-col gap-2">
+                <div className="flex gap-1 bg-slate-50 p-1 rounded-xl">
+                  {(['rectangle', 'oval', 'triangle', 'line'] as ShapeType[]).map((s) => (
+                    <button key={s} onClick={() => setActiveShape(s)} className={`flex-1 py-1 text-xs font-bold rounded-lg capitalize transition ${activeShape === s ? 'bg-white shadow-xs text-blue-600' : 'text-slate-600'}`}>{s}</button>
+                  ))}
+                </div>
+                <div className="flex flex-col gap-2 border-t border-slate-100 pt-2 px-1">
+                  <div className="flex items-center justify-between gap-4 text-xs font-bold text-slate-500">
+                    <span>Stroke Weight: {lineWidth}px</span>
+                    <input type="range" min="1" max="15" value={lineWidth} onChange={(e) => setLineWidth(Number(e.target.value))} className="w-24 accent-blue-600" />
+                  </div>
+                  <div className="flex gap-1.5 justify-center mt-1">
+                    {['#000000', '#ee2424', '#248cee', '#24ee59', '#facc15'].map((c) => (
+                      <button key={c} onClick={() => setColor(c)} className={`w-5 h-5 rounded-md ${color === c ? 'ring-2 ring-offset-2 ring-blue-600' : ''}`} style={{ backgroundColor: c }} />
+                    ))}
+                  </div>
+                </div>
+              </div>
+            )}
+
+            {activeMenu === 'text' && (
+              <div className="flex flex-col gap-2 px-1">
+                <span className="text-[10px] font-black uppercase text-slate-400 tracking-wider">Font Matrix Config</span>
+                <div className="flex items-center justify-between gap-4 text-xs font-bold text-slate-500">
+                  <span>Size: {fontSize}px</span>
+                  <input type="range" min="12" max="72" value={fontSize} onChange={(e) => setFontSize(Number(e.target.value))} className="w-24 accent-blue-600" />
+                </div>
+                <div className="flex gap-1 bg-slate-50 p-1 rounded-xl">
+                  {(['normal', 'bold', 'italic'] as const).map((style) => (
+                    <button key={style} onClick={() => setFontStyle(style)} className={`flex-1 py-0.5 text-[10px] font-black uppercase rounded-md transition ${fontStyle === style ? 'bg-white text-blue-600 shadow-xs' : 'text-slate-500'}`}>{style}</button>
+                  ))}
+                </div>
+                <div className="flex gap-1.5 justify-center mt-1 border-t border-slate-100 pt-2">
+                  {['#000000', '#ee2424', '#248cee', '#24ee59', '#facc15'].map((c) => (
+                    <button key={c} onClick={() => setColor(c)} className={`w-5 h-5 rounded-md ${color === c ? 'ring-2 ring-offset-2 ring-blue-600' : ''}`} style={{ backgroundColor: c }} />
+                  ))}
+                </div>
+              </div>
+            )}
+          </div>
+        )}
+
+        {/* Bottom Multi-Tool Menu Bar controller Dock */}
+        <div className="absolute bottom-6 left-1/2 -translate-x-1/2 bg-white/95 backdrop-blur-md border border-slate-200 p-2 rounded-2xl shadow-xl z-20 flex items-center gap-1">
+          <button 
+            onClick={() => { setActiveTool('select'); setActiveMenu(activeMenu === 'select' ? null : 'select') }}
+            className={`p-2 rounded-xl text-xs flex flex-col items-center transition min-w-[54px] ${activeTool === 'select' ? 'bg-blue-50 text-blue-600 font-bold' : 'text-slate-600 hover:bg-slate-100'}`}
+          >
+            <span className="text-sm">🖱️</span>
+            <span className="text-[8px] font-black uppercase tracking-tight mt-0.5">Select</span>
+          </button>
+
+          <button 
+            onClick={() => { setActiveTool('move'); setActiveMenu(null); setSelectedIds([]); setLocalLaserPos(null); }}
+            className={`p-2 rounded-xl text-xs flex flex-col items-center transition min-w-[54px] ${activeTool === 'move' ? 'bg-blue-50 text-blue-600 font-bold' : 'text-slate-600 hover:bg-slate-100'}`}
+          >
+            <span className="text-sm">🖐️</span>
+            <span className="text-[8px] font-black uppercase tracking-tight mt-0.5">Move</span>
+          </button>
+
+          <button 
+            onClick={() => { setActiveTool('brush'); setActiveMenu(activeMenu === 'brush' ? null : 'brush') }}
+            className={`p-2 rounded-xl text-xs flex flex-col items-center transition min-w-[54px] ${activeTool === 'brush' ? 'bg-blue-50 text-blue-600 font-bold' : 'text-slate-600 hover:bg-slate-100'}`}
+          >
+            <span className="text-sm">🖌️</span>
+            <span className="text-[8px] font-black uppercase tracking-tight mt-0.5">{activeBrush}</span>
+          </button>
+
+          <button 
+            onClick={() => { setActiveTool('laser'); setActiveMenu(null); setSelectedIds([]); }}
+            className={`p-2 rounded-xl text-xs flex flex-col items-center transition min-w-[54px] ${activeTool === 'laser' ? 'bg-blue-50 text-blue-600 font-bold' : 'text-slate-600 hover:bg-slate-100'}`}
+          >
+            <span className="text-sm">🪄</span>
+            <span className="text-[8px] font-black uppercase tracking-tight mt-0.5">Laser</span>
+          </button>
+
+          <button 
+            onClick={() => { setActiveTool('shape'); setActiveMenu(activeMenu === 'shape' ? null : 'shape') }}
+            className={`p-2 rounded-xl text-xs flex flex-col items-center transition min-w-[54px] ${activeTool === 'shape' ? 'bg-blue-50 text-blue-600 font-bold' : 'text-slate-600 hover:bg-slate-100'}`}
+          >
+            <span className="text-sm">⬡</span>
+            <span className="text-[8px] font-black uppercase tracking-tight mt-0.5">{activeShape}</span>
+          </button>
+
+          <button 
+            onClick={() => { setActiveTool('text'); setActiveMenu(activeMenu === 'text' ? null : 'text') }}
+            className={`p-2 rounded-xl text-xs flex flex-col items-center transition min-w-[54px] ${activeTool === 'text' ? 'bg-blue-50 text-blue-600 font-bold' : 'text-slate-600 hover:bg-slate-100'}`}
+          >
+            <span className="text-sm">🔤</span>
+            <span className="text-[8px] font-black uppercase tracking-tight mt-0.5">Text</span>
+          </button>
+        </div>
+
+        {/* Infinite Navigation Scale Tracker Ratio panel component module layout mapping */}
+        <div className="absolute bottom-6 right-6 bg-white/95 backdrop-blur-md border border-slate-200 px-3 py-1.5 rounded-xl shadow-md text-[10px] font-mono font-black text-slate-500 flex items-center gap-2 z-20">
+          <button onClick={() => setScale(Math.max(0.15, scale - 0.1))} className="hover:text-blue-600 transition p-0.5">➖</button>
+          <span className="min-w-[32px] text-center">{Math.round(scale * 100)}%</span>
+          <button onClick={() => setScale(Math.min(4.00, scale + 0.1))} className="hover:text-blue-600 transition p-0.5">➕</button>
+          <div className="w-[1px] h-3 bg-slate-200 mx-0.5" />
+          <button onClick={() => { setScale(1); setPan({ x: 0, y: 0 }) }} className="text-[8px] bg-slate-100 px-1.5 py-1 rounded-md hover:bg-slate-200 transition text-slate-600 uppercase font-sans">Reset</button>
+        </div>
+
+      </div>
+    </div>
+  )
+}
