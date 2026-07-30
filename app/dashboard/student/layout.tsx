@@ -1,185 +1,173 @@
-// app/dashboard/student/layout.tsx
 "use client"
-import React, { useState, useEffect, createContext, useContext } from 'react'
+
+import {
+  createContext,
+  useContext,
+  useState,
+  useEffect,
+  Suspense,
+  type ReactNode
+} from 'react'
 import { useRouter, usePathname, useSearchParams } from 'next/navigation'
 import { supabase } from '@/lib/supabase'
 import NotificationCenter from '@/components/NotificationCenter'
 
-// 🚀 EXPORTED TYPE: Exported so page.tsx can import it without compiler errors
+// ---------------------------------------------------------------------------
+// 🏛️ Shared tab identity — single source of truth for the whole Student view
+// ---------------------------------------------------------------------------
 export type TabID = 'home' | 'schedule' | 'reports' | 'locker' | 'chat' | 'workspace'
 
-// Context matrix to bridge state to children pages
-const StudentContext = createContext<{ 
-  student: any; 
-  activeTab: TabID; 
-  setActiveTab: (tab: TabID) => void 
-}>({
-  student: null,
-  activeTab: 'home',
-  setActiveTab: () => {},
-})
+const VALID_TABS: TabID[] = ['home', 'schedule', 'reports', 'locker', 'chat', 'workspace']
 
-// 🌟 EXPLICIT NAMED EXPORT: Fixed to clear Turbopack/Next.js binding issues
-export function useStudent() {
-  return useContext(StudentContext)
+interface StudentContextValue {
+  studentId: string
+  studentName: string
+  studentGrade: string
+  activeTab: TabID
+  handleTabChange: (tab: TabID) => void
 }
 
-export default function StudentDashboardLayout({ children }: { children: React.ReactNode }) {
+const StudentContext = createContext<StudentContextValue | null>(null)
+
+// Named export hook (kept as a plain named function per Turbopack mapping requirement)
+export function useStudent() {
+  const ctx = useContext(StudentContext)
+  if (!ctx) {
+    throw new Error('useStudent() must be called from within StudentDashboardLayout')
+  }
+  return ctx
+}
+
+// ---------------------------------------------------------------------------
+// 🎯 Layout content — auth guard, profile fetch, context + URL sync, shell
+// ---------------------------------------------------------------------------
+function StudentDashboardLayoutContent({ children }: { children: ReactNode }) {
   const router = useRouter()
   const pathname = usePathname()
-  const searchParams = useSearchParams()
+  const searchParams = useSearchParams() // 🔗 Safely extracted inside the Suspense Boundary
 
   const [activeTab, setActiveTab] = useState<TabID>('home')
-  const [checkingAuth, setCheckingAuth] = useState(true)
-  const [sidebarOpen, setSidebarOpen] = useState(true)
-  const [student, setStudent] = useState<any>(null)
+  const [studentId, setStudentId] = useState<string>('')
+  const [studentName, setStudentName] = useState<string>('')
+  const [studentGrade, setStudentGrade] = useState<string>('')
+  const [loading, setLoading] = useState(true)
 
-  // Listen directly to Next.js live query parameters changes
+  // 🎯 URL -> STATE: handles direct links, refreshes, and browser back/forward pops
   useEffect(() => {
-    const tabParam = searchParams.get('tab') as TabID
-    const validTabs: TabID[] = ['home', 'schedule', 'reports', 'locker', 'chat', 'workspace']
-    
-    if (tabParam && validTabs.includes(tabParam)) {
-      setActiveTab(tabParam)
+    const incomingTab = searchParams.get('tab') as TabID | null
+
+    if (incomingTab && VALID_TABS.includes(incomingTab)) {
+      setActiveTab(incomingTab)
+    } else {
+      setActiveTab('home') // Safe default layout configuration fallback
     }
-  }, [searchParams])
+  }, [searchParams, pathname])
 
-  useEffect(() => {
-    let isMounted = true
-
-    async function verifyRosterAccess() {
-      const { data: { session } } = await supabase.auth.getSession()
-      
-      if (!isMounted) return
-
-      if (session?.user?.email) {
-        const { data: profile, error: profileError } = await supabase
-          .from('students')
-          .select('*')
-          .eq('email', session.user.email)
-          .maybeSingle()
-
-        if (profileError || !profile) {
-          console.error("Student portfolio resolve failure:", profileError)
-          setCheckingAuth(false)
-          return
-        }
-        
-        setStudent(profile)
-        setCheckingAuth(false)
-      } else {
-        router.push('/login')
-      }
-    }
-
-    verifyRosterAccess()
-
-    const { data: { subscription } } = supabase.auth.onAuthStateChange(async (event) => {
-      if (!isMounted) return
-      if (event === 'SIGNED_OUT') {
-        router.push('/login')
-      }
-    })
-
-    return () => {
-      isMounted = false
-      subscription.unsubscribe()
-    }
-  }, [router])
-
-  // 🎯 NEXT.JS NATIVE SYNCHRONIZATION: Pushes parameter strings cleanly without history lockups
+  // 🎯 STATE -> URL: pushed from clicks, keeps other query params intact, no history lock
   const handleTabChange = (tab: TabID) => {
-    setActiveTab(tab)
-    const currentParams = new URLSearchParams(searchParams.toString())
-    currentParams.set('tab', tab)
-    router.push(`${pathname}?${currentParams.toString()}`)
+    setActiveTab(tab) // optimistic update so the UI feels instant
+
+    const params = new URLSearchParams(searchParams.toString())
+    params.set('tab', tab)
+    router.push(`${pathname}?${params.toString()}`, { scroll: false })
   }
 
-  if (checkingAuth) {
+  // 🔐 Session & profile guarding
+  useEffect(() => {
+    async function checkSecuritySession() {
+      const { data: { session }, error: authError } = await supabase.auth.getSession()
+      if (authError || !session?.user) return router.push('/login')
+
+      const { data: profile, error: dbError } = await supabase
+        .from('students')
+        .select('id, name, grade')
+        .eq('email', session.user.email)
+        .maybeSingle()
+
+      if (dbError || !profile) return router.push('/login')
+
+      setStudentId(profile.id)
+      setStudentName(profile.name || 'Academic Student')
+      setStudentGrade(profile.grade || 'Enrolled Pro')
+      setLoading(false)
+    }
+    checkSecuritySession()
+  }, [router])
+
+  if (loading) {
     return (
-      <div className="h-screen w-screen flex flex-col items-center justify-center text-slate-400 font-medium animate-pulse bg-slate-50 gap-2">
-        <span className="w-6 h-6 border-2 border-blue-600 border-t-transparent rounded-full animate-spin" />
-        <p className="text-xs font-bold uppercase tracking-widest text-slate-400">Syncing Secure Student Node...</p>
+      <div className="w-screen h-screen bg-slate-50 flex items-center justify-center">
+        <span className="w-6 h-6 border-4 border-blue-600 border-t-transparent rounded-full animate-spin" />
       </div>
     )
   }
 
   return (
-    <StudentContext.Provider value={{ student, activeTab, setActiveTab: handleTabChange }}>
-      <div className="flex h-screen bg-slate-50 text-slate-900 overflow-hidden font-sans">
-        
-        {/* SIDEBAR NAVIGATION FRAMEWORK */}
-        <aside className={`border-r border-slate-200 flex flex-col bg-white transition-all duration-300 ${sidebarOpen ? 'w-64' : 'w-0 -translate-x-full md:w-20 md:translate-x-0'}`}>
-          <div className="h-16 flex items-center justify-between px-6 border-b border-slate-100">
-            {sidebarOpen && (
-              <div className="flex items-center gap-2 font-black text-blue-600 text-xs tracking-tighter uppercase">
-                <span>🚀</span> Student Portal
-              </div>
-            )}
-            <button onClick={() => setSidebarOpen(!sidebarOpen)} className="p-1.5 hover:bg-slate-100 rounded-lg text-slate-500 text-sm hidden md:block">
-              ☰
-            </button>
+    <StudentContext.Provider value={{ studentId, studentName, studentGrade, activeTab, handleTabChange }}>
+      <div className="w-screen h-screen flex flex-col sm:flex-row bg-slate-50 text-slate-900 overflow-hidden">
+        {/* SIDEBAR SHELL — the page portals its nav buttons into #student-sidebar-nav */}
+        <aside className="w-full sm:w-64 bg-white border-b sm:border-b-0 sm:border-r border-slate-200 flex flex-col justify-between shrink-0 z-20">
+          <div className="p-5 sm:p-6">
+            <div className="mb-6 hidden sm:block">
+              <h2 className="text-xl font-black text-blue-600 tracking-tight">Tuition Hero</h2>
+              <p className="text-[11px] text-slate-400 mt-0.5 font-semibold">Student Portal</p>
+            </div>
+
+            {/* 🎨 Portal target: page.tsx injects nav buttons built from navItems here */}
+            <nav
+              id="student-sidebar-nav"
+              className="flex flex-row sm:flex-col gap-1 overflow-x-auto sm:overflow-x-visible pb-2 sm:pb-0"
+            />
           </div>
 
-          <nav className="flex-1 p-4 space-y-1">
-            <SidebarItem icon="🏠" label="Home Base" active={activeTab === 'home'} collapsed={!sidebarOpen} onClick={() => handleTabChange('home')} />
-            <SidebarItem icon="📅" label="My Schedule" active={activeTab === 'schedule'} collapsed={!sidebarOpen} onClick={() => handleTabChange('schedule')} />
-            <SidebarItem icon="📜" label="Progress Reports" active={activeTab === 'reports'} collapsed={!sidebarOpen} onClick={() => handleTabChange('reports')} />
-            <SidebarItem icon="💻" label="My Workspaces" active={activeTab === 'workspace'} collapsed={!sidebarOpen} onClick={() => handleTabChange('workspace')} />
-            <SidebarItem icon="📂" label="Locker Rooms" active={activeTab === 'locker'} collapsed={!sidebarOpen} onClick={() => handleTabChange('locker')} />
-            <SidebarItem icon="💬" label="Study Chat" active={activeTab === 'chat'} collapsed={!sidebarOpen} onClick={() => handleTabChange('chat')} />
-          </nav>
-
-          <div className="p-4 border-t border-slate-100">
-            <button 
-              onClick={async () => { await supabase.auth.signOut(); router.push('/login'); }} 
-              className="w-full flex items-center gap-3 px-3 py-2.5 text-xs font-bold text-slate-400 hover:text-red-500 transition rounded-xl"
+          <div className="p-4 border-t border-slate-100 hidden sm:block">
+            <button
+              type="button"
+              onClick={async () => { await supabase.auth.signOut(); router.push('/login') }}
+              className="w-full py-2.5 text-xs font-black uppercase tracking-wider text-red-500 hover:bg-red-50 rounded-xl transition"
             >
-              <span>🚪</span> {sidebarOpen && "Sign Out"}
+              Sign Out
             </button>
           </div>
         </aside>
 
-        {/* DATA CONTAINER AREA */}
-        <main className="flex-1 flex flex-col min-w-0 bg-white">
-          <header className="h-16 px-8 border-b border-slate-100 flex items-center justify-between shrink-0">
+        {/* DASHBOARD VIEWPORT MATRIX */}
+        <div className="flex-1 flex flex-col overflow-hidden relative">
+          <header className="h-16 bg-white border-b border-slate-200 px-6 sm:px-8 flex items-center justify-between shrink-0">
+            <span className="text-xs font-bold text-slate-400">
+              Welcome back, <span className="text-slate-700">{studentName}</span>
+            </span>
             <div className="flex items-center gap-4">
-              <button onClick={() => setSidebarOpen(!sidebarOpen)} className="p-2 hover:bg-slate-100 rounded-lg text-slate-600 md:hidden">
-                ☰
-              </button>
-              <h2 className="text-xs font-black uppercase tracking-widest text-slate-400">{activeTab} Deck</h2>
-            </div>
-            
-            <div className="flex items-center gap-4">
-              {student?.id && <NotificationCenter userId={student.id} />}
-
-              <div className="text-right">
-                <p className="text-xs font-black text-slate-800">{student?.name || 'Academic Student'}</p>
-                <p className="text-[9px] font-bold text-blue-600 uppercase tracking-wider">{student?.grade || 'Enrolled Pro'}</p>
+              <NotificationCenter userId={studentId} />
+              <div className="text-right hidden sm:block">
+                <p className="text-xs font-black text-slate-800">{studentName}</p>
+                <p className="text-[9px] font-bold text-blue-600 uppercase tracking-wider">{studentGrade}</p>
               </div>
             </div>
           </header>
 
-          {/* 🎯 TARGET MOUNT SLOT: Equipped with portal ID injection framework */}
-          <div className="p-8 flex-1 overflow-y-auto max-w-5xl w-full mx-auto" id="student-main-viewport">
-            {children}
-          </div>
-        </main>
+          {/* 🎨 Portal target: page.tsx projects the active tab's content here */}
+          <main className="flex-1 overflow-y-auto p-6 sm:p-8 max-w-5xl w-full mx-auto">
+            <div id="student-main-viewport" />
+          </main>
+        </div>
       </div>
+
+      {/* The Page (App Router's `children`) renders here */}
+      {children}
     </StudentContext.Provider>
   )
 }
 
-function SidebarItem({ icon, label, active, collapsed, onClick }: { icon: string, label: string, active: boolean, collapsed: boolean, onClick: () => void }) {
+// 📦 Safe Export Root Wrapped in a Next.js Client Suspense Boundary Container
+export default function StudentDashboardLayout({ children }: { children: ReactNode }) {
   return (
-    <button 
-      onClick={onClick}
-      className={`w-full flex items-center gap-3 px-3.5 py-3 rounded-xl text-xs font-black transition-all ${
-        active ? 'bg-slate-100 text-blue-600 shadow-xs' : 'text-slate-400 hover:text-slate-700 hover:bg-slate-50'
-      } ${collapsed ? 'justify-center' : ''}`}
-    >
-      <span className="text-sm">{icon}</span>
-      {!collapsed && <span>{label}</span>}
-    </button>
+    <Suspense fallback={
+      <div className="w-screen h-screen bg-slate-50 flex items-center justify-center">
+        <span className="w-6 h-6 border-4 border-blue-600 border-t-transparent rounded-full animate-spin" />
+      </div>
+    }>
+      <StudentDashboardLayoutContent>{children}</StudentDashboardLayoutContent>
+    </Suspense>
   )
 }
