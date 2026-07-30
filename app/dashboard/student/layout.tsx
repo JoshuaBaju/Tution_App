@@ -5,13 +5,14 @@ import { useRouter, usePathname, useSearchParams } from 'next/navigation'
 import { supabase } from '@/lib/supabase'
 import NotificationCenter from '@/components/NotificationCenter'
 
-type TabType = 'home' | 'schedule' | 'reports' | 'locker' | 'chat' | 'workspace'
+// 🚀 EXPORTED TYPE: Exported so page.tsx can import it without compiler errors
+export type TabID = 'home' | 'schedule' | 'reports' | 'locker' | 'chat' | 'workspace'
 
 // Context matrix to bridge state to children pages
 const StudentContext = createContext<{ 
   student: any; 
-  activeTab: TabType; 
-  setActiveTab: (tab: TabType) => void 
+  activeTab: TabID; 
+  setActiveTab: (tab: TabID) => void 
 }>({
   student: null,
   activeTab: 'home',
@@ -28,15 +29,15 @@ export default function StudentDashboardLayout({ children }: { children: React.R
   const pathname = usePathname()
   const searchParams = useSearchParams()
 
-  const [activeTab, setActiveTab] = useState<TabType>('home')
+  const [activeTab, setActiveTab] = useState<TabID>('home')
   const [checkingAuth, setCheckingAuth] = useState(true)
   const [sidebarOpen, setSidebarOpen] = useState(true)
   const [student, setStudent] = useState<any>(null)
 
   // Listen directly to Next.js live query parameters changes
   useEffect(() => {
-    const tabParam = searchParams.get('tab') as TabType
-    const validTabs: TabType[] = ['home', 'schedule', 'reports', 'locker', 'chat', 'workspace']
+    const tabParam = searchParams.get('tab') as TabID
+    const validTabs: TabID[] = ['home', 'schedule', 'reports', 'locker', 'chat', 'workspace']
     
     if (tabParam && validTabs.includes(tabParam)) {
       setActiveTab(tabParam)
@@ -87,7 +88,7 @@ export default function StudentDashboardLayout({ children }: { children: React.R
   }, [router])
 
   // 🎯 NEXT.JS NATIVE SYNCHRONIZATION: Pushes parameter strings cleanly without history lockups
-  const handleTabChange = (tab: TabType) => {
+  const handleTabChange = (tab: TabID) => {
     setActiveTab(tab)
     const currentParams = new URLSearchParams(searchParams.toString())
     currentParams.set('tab', tab)
@@ -159,7 +160,7 @@ export default function StudentDashboardLayout({ children }: { children: React.R
             </div>
           </header>
 
-          {/* 🎯 TARGET TARGET MOUNT SLOT: Equipped with portal ID injection framework */}
+          {/* 🎯 TARGET MOUNT SLOT: Equipped with portal ID injection framework */}
           <div className="p-8 flex-1 overflow-y-auto max-w-5xl w-full mx-auto" id="student-main-viewport">
             {children}
           </div>
