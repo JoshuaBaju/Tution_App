@@ -1,3 +1,4 @@
+// Replace lines 117-120 with this fixed code:
 "use client"
 import { useState, useEffect, useRef } from 'react'
 import { supabase } from '@/lib/supabase'
@@ -31,7 +32,7 @@ export default function NotificationCenter({ userId }: { userId: string }) {
         .limit(10)
 
       if (error) {
-        console.error("Error pulling history framework logs:", error.message)
+        console.error("Error pulling notification logs:", error.message)
       } else if (data) {
         setNotifications(data as Notification[])
         setUnreadCount(data.filter(n => !n.is_read).length)
@@ -65,22 +66,17 @@ export default function NotificationCenter({ userId }: { userId: string }) {
           else if (payload.eventType === 'UPDATE') {
             const updatedAlert = payload.new as Notification
             
-            setNotifications(prev =>
-              prev.map(n => n.id === updatedAlert.id ? updatedAlert : n)
-            )
-
-            // Recalculate unread totals directly based on live incoming row changes
-            setUnreadCount(prev => {
-              const oldRow = notifications.find(n => n.id === updatedAlert.id)
+            setNotifications(prev => {
+              const oldRow = prev.find(n => n.id === updatedAlert.id)
               const wasUnread = oldRow ? !oldRow.is_read : true
               
               if (wasUnread && updatedAlert.is_read) {
-                return Math.max(0, prev - 1)
+                setUnreadCount(count => Math.max(0, count - 1))
+              } else if (!wasUnread && !updatedAlert.is_read) {
+                setUnreadCount(count => count + 1)
               }
-              if (!wasUnread && !updatedAlert.is_read) {
-                return prev + 1
-              }
-              return prev
+
+              return prev.map(n => n.id === updatedAlert.id ? updatedAlert : n)
             })
           }
           else if (payload.eventType === 'DELETE') {
@@ -108,7 +104,7 @@ export default function NotificationCenter({ userId }: { userId: string }) {
       supabase.removeChannel(channel)
       document.removeEventListener("mousedown", handleClickOutside)
     }
-  }, [userId, notifications])
+  }, [userId]) // 👈 FIXED: ONLY depend on userId!
 
   const markAsRead = async (id: string) => {
     const { error } = await supabase
@@ -147,7 +143,6 @@ export default function NotificationCenter({ userId }: { userId: string }) {
 
   return (
     <div className="relative inline-block text-left" ref={dropdownRef}>
-      {/* Trigger Button with Badge Counter */}
       <button 
         onClick={() => setIsOpen(!isOpen)} 
         className={`relative p-2 text-slate-500 rounded-xl transition-all border ${
@@ -164,7 +159,6 @@ export default function NotificationCenter({ userId }: { userId: string }) {
         )}
       </button>
 
-      {/* Flyout Dropdown Menu */}
       {isOpen && (
         <div className="absolute right-0 mt-2 w-80 bg-white border border-slate-200 rounded-2xl shadow-xl z-50 p-4 space-y-3 animate-fadeIn">
           <div className="flex justify-between items-center border-b border-slate-100 pb-2">
@@ -178,7 +172,6 @@ export default function NotificationCenter({ userId }: { userId: string }) {
             )}
           </div>
 
-          {/* List Display View */}
           <div className="max-h-64 overflow-y-auto space-y-2 pr-1">
             {notifications.length === 0 ? (
               <p className="text-xs text-slate-400 text-center py-6 italic">Your feed is clear.</p>

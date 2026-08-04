@@ -6,6 +6,8 @@ import { supabase } from '@/lib/supabase'
 import Whiteboard from '@/app/meeting/components/Whiteboard'
 import FileDirectory from '@/app/meeting/components/FileDirectory'
 import ChatRooms from '@/app/meeting/components/ChatRooms'
+import ConfigurePage from '@/app/meeting/components/ConfigurePage'
+import VideoControls from '@/components/meeting/VideoControls'
 
 export default function ImmersiveClassroomPage() {
   const params = useParams()
@@ -21,17 +23,11 @@ export default function ImmersiveClassroomPage() {
   const [isDemoClass, setIsDemoClass] = useState<boolean>(false)
   const [exiting, setExiting] = useState<boolean>(false)
   
-  // Feature 1: Pre-session Green Room States
+  // Pre-session State
   const [hasStartedClass, setHasStartedClass] = useState<boolean>(false)
-  const [localStream, setLocalStream] = useState<MediaStream | null>(null)
-  const [micLevel, setMicLevel] = useState<number>(0)
   const [otherPartyName, setOtherPartyName] = useState<string>("Loading profile...")
-  const preSessionVideoRef = useRef<HTMLVideoElement>(null)
-  const audioContextRef = useRef<AudioContext | null>(null)
-  const analyserRef = useRef<AnalyserNode | null>(null)
-  const animationFrameRef = useRef<number | null>(null)
 
-  // Feature 2: Presence States
+  // Presence States
   const [otherPartyJoined, setOtherPartyJoined] = useState<boolean>(false)
   const [announcement, setAnnouncement] = useState<string | null>(null)
   
@@ -56,6 +52,18 @@ export default function ImmersiveClassroomPage() {
   
   const isResizingSidebar = useRef(false)
   const isResizingAv = useRef(false)
+
+  // Refs to prevent useEffect loop in Realtime Presence
+  const otherPartyJoinedRef = useRef(false)
+  const otherPartyNameRef = useRef("Loading profile...")
+
+  useEffect(() => {
+    otherPartyJoinedRef.current = otherPartyJoined
+  }, [otherPartyJoined])
+
+  useEffect(() => {
+    otherPartyNameRef.current = otherPartyName
+  }, [otherPartyName])
 
   // Sidebar dynamic layout handlers
   const startSidebarResize = (e: React.MouseEvent) => {
@@ -103,39 +111,6 @@ export default function ImmersiveClassroomPage() {
     }
   }, [])
 
-  // 🎙️ Dynamic Audio Level Meter Initialization
-  const startAudioMeter = (stream: MediaStream) => {
-    try {
-      const AudioContextClass = window.AudioContext || (window as any).webkitAudioContext
-      const audioContext = new AudioContextClass()
-      const source = audioContext.createMediaStreamSource(stream)
-      const analyser = audioContext.createAnalyser()
-      analyser.fftSize = 256
-      source.connect(analyser)
-      
-      audioContextRef.current = audioContext
-      analyserRef.current = analyser
-
-      const bufferLength = analyser.frequencyBinCount
-      const dataArray = new Uint8Array(bufferLength)
-
-      const updateMeter = () => {
-        if (!analyserRef.current) return
-        analyserRef.current.getByteFrequencyData(dataArray)
-        let total = 0
-        for (let i = 0; i < bufferLength; i++) {
-          total += dataArray[i]
-        }
-        const average = total / bufferLength
-        setMicLevel(Math.min(100, Math.floor((average / 128) * 100)))
-        animationFrameRef.current = requestAnimationFrame(updateMeter)
-      }
-      updateMeter()
-    } catch (e) {
-      console.error("Audio Context processing denied or unsupported:", e)
-    }
-  }
-
   // ⚡ Main Framework Loader & Profile Resolver Context
   useEffect(() => {
     async function initializeClassroom() {
@@ -154,20 +129,9 @@ export default function ImmersiveClassroomPage() {
         if (user) {
           activeUserId = user.id
           setCurrentUserId(user.id)
-          
-          try {
-            const { data: profile } = await supabase
-              .from('profiles')
-              .select('full_name')
-              .eq('id', user.id)
-              .maybeSingle()
-            if (profile?.full_name) setCurrentUserName(profile.full_name)
-          } catch (e) {
-            console.warn("Profiles look up skipped.")
-          }
         }
 
-        // Fetch target booking session info first to get accurate metadata context
+        // 1. Fetch Session / Booking info
         const { data: session } = await supabase
           .from('sessions')
           .select(`id, booking_id, topic, bookings ( teacher, student, parent, subject )`)
@@ -183,6 +147,7 @@ export default function ImmersiveClassroomPage() {
             .select('teacher, student, parent, subject')
             .eq('id', lookupId)
             .maybeSingle()
+
           if (booking) {
             targetBooking = booking
             isDemo = true
@@ -199,63 +164,92 @@ export default function ImmersiveClassroomPage() {
             })
           }
 
-          let resolvedTeacherName = "Instructor Teacher"
-          let resolvedStudentName = "Student Participant"
+          // 2. Resolve Role Names
+          let resolvedTeacherName = "Teacher"
+          let resolvedStudentName = "Student"
+          let resolvedParentName = "Parent"
 
           if (targetBooking.teacher) {
-            const { data: teacherData } = await supabase
-              .from('teachers')
-              .select('name')
-              .eq('id', targetBooking.teacher)
-              .maybeSingle()
-            if (teacherData?.name) resolvedTeacherName = teacherData.name
+            const { data: tData } = await supabase.from('teachers').select('name').eq('id', targetBooking.teacher).maybeSingle()
+            if (tData?.name) resolvedTeacherName = tData.name
           }
 
           if (targetBooking.student) {
-            const { data: studentData } = await supabase
-              .from('students')
-              .select('name')
-              .eq('id', targetBooking.student)
-              .maybeSingle()
-            if (studentData?.name) resolvedStudentName = studentData.name
+            const { data: sData } = await supabase.from('students').select('name').eq('id', targetBooking.student).maybeSingle()
+            if (sData?.name) resolvedStudentName = sData.name
           }
 
+          if (targetBooking.parent) {
+            const { data: pData } = await supabase.from('parents').select('name').eq('id', targetBooking.parent).maybeSingle()
+            if (pData?.name) resolvedParentName = pData.name
+          }
+
+          // Determine current user role & participant names
           if (activeUserId) {
             if (activeUserId === targetBooking.teacher) {
               currentResolvedRole = 'teacher'
               setUserRole('teacher')
-              setOtherPartyName(resolvedStudentName)
-            } else {
+              setCurrentUserName(resolvedTeacherName)
+              setOtherPartyName(isDemo ? resolvedParentName : resolvedStudentName)
+            } else if (activeUserId === targetBooking.student) {
               currentResolvedRole = 'student'
               setUserRole('student')
+              setCurrentUserName(resolvedStudentName)
+              setOtherPartyName(resolvedTeacherName)
+            } else if (activeUserId === targetBooking.parent) {
+              currentResolvedRole = 'parent'
+              setUserRole('parent')
+              setCurrentUserName(resolvedParentName)
               setOtherPartyName(resolvedTeacherName)
             }
+          }
 
-            // 🔑 RESOLVE REAL ROOM ID: Look up based on the actual structural session pairing
-            const { data: realRoom } = await supabase
+          // 3. Chat Room Query / Creation Logic
+          if (isDemo) {
+            const { data: demoRoom } = await supabase
+              .from('chat_rooms')
+              .select('id')
+              .eq('teacher_id', targetBooking.teacher)
+              .eq('parent_id', targetBooking.parent)
+              .maybeSingle()
+
+            if (demoRoom?.id) {
+              setChatRoomId(demoRoom.id)
+            } else {
+              const { data: newDemoRoom } = await supabase
+                .from('chat_rooms')
+                .insert([{
+                  teacher_id: targetBooking.teacher,
+                  parent_id: targetBooking.parent,
+                  student_id: null
+                }])
+                .select('id')
+                .single()
+
+              if (newDemoRoom?.id) setChatRoomId(newDemoRoom.id)
+            }
+          } else {
+            const { data: sessionRoom } = await supabase
               .from('chat_rooms')
               .select('id')
               .eq('teacher_id', targetBooking.teacher)
               .eq('student_id', targetBooking.student)
               .maybeSingle()
 
-            if (realRoom?.id) {
-              setChatRoomId(realRoom.id)
+            if (sessionRoom?.id) {
+              setChatRoomId(sessionRoom.id)
             } else {
-              // Create room safely if it hasn't been instantiated yet
-              const { data: newRoom } = await supabase
+              const { data: newSessionRoom } = await supabase
                 .from('chat_rooms')
-                .insert([
-                  {
-                    teacher_id: targetBooking.teacher,
-                    student_id: targetBooking.student,
-                    parent_id: targetBooking.parent || null
-                  }
-                ])
+                .insert([{
+                  teacher_id: targetBooking.teacher,
+                  student_id: targetBooking.student,
+                  parent_id: null
+                }])
                 .select('id')
                 .single()
-              
-              if (newRoom?.id) setChatRoomId(newRoom.id)
+
+              if (newSessionRoom?.id) setChatRoomId(newSessionRoom.id)
             }
           }
 
@@ -266,39 +260,13 @@ export default function ImmersiveClassroomPage() {
 
         sendToDashboardFallback(currentResolvedRole)
       } catch (err) {
-        console.error("Workspace mounting system exception:", err)
+        console.error("Workspace mounting exception:", err)
         router.push('/dashboard/teacher')
       }
     }
 
     initializeClassroom()
   }, [lookupId, router])
-
-  // 🛡️ Request hardware capabilities on Green room rendering
-  useEffect(() => {
-    if (!hasStartedClass && !loading) {
-      navigator.mediaDevices.getUserMedia({ video: true, audio: true })
-        .then((stream) => {
-          setLocalStream(stream)
-          if (preSessionVideoRef.current) {
-            preSessionVideoRef.current.srcObject = stream
-          }
-          startAudioMeter(stream)
-        })
-        .catch((err) => console.error("Access permissions for media stream denied:", err))
-    }
-
-    return () => {
-      if (animationFrameRef.current) {
-        cancelAnimationFrame(animationFrameRef.current)
-      }
-      if (audioContextRef.current && audioContextRef.current.state !== 'closed') {
-        audioContextRef.current.close().catch((err) => 
-          console.warn("AudioContext was already terminated safely:", err)
-        )
-      }
-    }
-  }, [hasStartedClass, loading])
 
   // 🤝 Real-time Workspace Presence Listeners
   useEffect(() => {
@@ -314,18 +282,18 @@ export default function ImmersiveClassroomPage() {
         const keys = Object.keys(state)
         
         const peersExist = keys.some(k => k !== currentUserId)
-        if (peersExist && !otherPartyJoined) {
+        if (peersExist && !otherPartyJoinedRef.current) {
           setOtherPartyJoined(true)
-          triggerNotification(`Your ${userRole === 'teacher' ? 'student' : 'teacher'} has entered the room!`)
-        } else if (!peersExist && otherPartyJoined) {
+          triggerNotification(`${otherPartyNameRef.current} has entered the room!`)
+        } else if (!peersExist && otherPartyJoinedRef.current) {
           setOtherPartyJoined(false)
           triggerNotification("The other party left the session workspace.")
         }
       })
       .on('presence', { event: 'join' }, ({ key }) => {
-        if (key !== currentUserId) {
+        if (key !== currentUserId && !otherPartyJoinedRef.current) {
           setOtherPartyJoined(true)
-          triggerNotification(`User joined as: ${otherPartyName}`)
+          triggerNotification(`User joined: ${otherPartyNameRef.current}`)
         }
       })
       .on('presence', { event: 'leave' }, ({ key }) => {
@@ -346,18 +314,11 @@ export default function ImmersiveClassroomPage() {
     return () => {
       supabase.removeChannel(channel)
     }
-  }, [hasStartedClass, cleanId, otherPartyName, currentUserId])
+  }, [hasStartedClass, cleanId, currentUserId])
 
   const triggerNotification = (msg: string) => {
     setAnnouncement(msg)
     setTimeout(() => setAnnouncement(null), 5000)
-  }
-
-  const handleBeginClass = () => {
-    if (localStream) {
-      localStream.getTracks().forEach(track => track.stop())
-    }
-    setHasStartedClass(true)
   }
 
   const handleExitWorkspace = async () => {
@@ -418,71 +379,16 @@ export default function ImmersiveClassroomPage() {
   // GREEN ROOM / PRE-JOIN INTERFACE
   if (!hasStartedClass) {
     return (
-      <div className="w-screen h-screen bg-slate-900 text-white flex items-center justify-center p-6 font-sans">
-        <div className="max-w-4xl w-full grid md:grid-cols-2 gap-8 items-center">
-          
-          <div className="space-y-4">
-            <div className="aspect-video bg-slate-950 rounded-2xl overflow-hidden border border-slate-800 relative shadow-2xl flex items-center justify-center">
-              <video ref={preSessionVideoRef} autoPlay playsInline muted className="w-full h-full object-cover scale-x-[-1]" />
-              <div className="absolute bottom-3 left-3 bg-slate-900/80 backdrop-blur-md px-3 py-1 rounded-lg border border-slate-700/50 text-xs flex items-center gap-2">
-                <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse" />
-                Camera Feed Online
-              </div>
-            </div>
-
-            <div className="bg-slate-950/40 border border-slate-800/80 rounded-xl p-4 space-y-2">
-              <div className="flex justify-between text-xs text-slate-400 font-bold tracking-wide uppercase">
-                <span>Microphone Testing Input</span>
-                <span className={micLevel > 5 ? "text-emerald-400 font-mono" : "text-slate-600"}>
-                  {micLevel > 5 ? 'Capturing Audio...' : 'Silent'}
-                </span>
-              </div>
-              <div className="h-2.5 bg-slate-800 rounded-full overflow-hidden w-full relative">
-                <div 
-                  style={{ width: `${micLevel}%` }} 
-                  className="h-full bg-gradient-to-r from-emerald-500 to-teal-400 rounded-full transition-all duration-75" 
-                />
-              </div>
-            </div>
-          </div>
-
-          <div className="space-y-6">
-            <div className="space-y-2">
-              <span className="text-[10px] uppercase font-black tracking-widest text-blue-400 bg-blue-500/10 px-2.5 py-1 rounded-md border border-blue-500/20 inline-block">
-                Ready to Join Session
-              </span>
-              <h2 className="text-2xl font-black text-slate-100 tracking-tight">{sessionData?.subject || "Live Classroom Session"}</h2>
-              <p className="text-sm text-slate-400 font-medium">Please confirm your camera/microphone signals align correctly prior to connection engagement.</p>
-            </div>
-
-            <hr className="border-slate-800" />
-
-            <div className="bg-slate-950/50 border border-slate-800 rounded-xl p-4 space-y-3 text-xs">
-              <div className="flex justify-between items-center">
-                <span className="text-slate-400 font-medium">Joining As Identity:</span>
-                <span className="font-bold text-slate-200 bg-slate-800 px-2.5 py-1 rounded border border-slate-700">{currentUserName} ({userRole || 'User'})</span>
-              </div>
-              <div className="flex justify-between items-center">
-                <span className="text-slate-400 font-medium">Target Participant:</span>
-                <span className="font-bold text-slate-200">{otherPartyName}</span>
-              </div>
-            </div>
-
-            <button
-              type="button"
-              onClick={handleBeginClass}
-              className="w-full py-4 bg-blue-600 hover:bg-blue-700 active:scale-[0.99] text-white text-xs font-black uppercase tracking-wider rounded-xl transition duration-200 shadow-lg shadow-blue-600/10 cursor-pointer"
-            >
-              🚀 Begin Class Session Workspace
-            </button>
-          </div>
-
-        </div>
-      </div>
+      <ConfigurePage
+        sessionSubject={sessionData?.subject}
+        currentUserName={currentUserName}
+        userRole={userRole}
+        otherPartyName={otherPartyName}
+        onBeginClass={() => setHasStartedClass(true)}
+      />
     )
   }
 
-  // CORE CLASSROOM LIVE WORKSPACE ENVIRONMENT
   const isAnyLeftPanelOpen = isCommunicationOpen || isChannelsOpen
 
   return (
@@ -494,32 +400,9 @@ export default function ImmersiveClassroomPage() {
         </div>
       )}
 
+      {/* Clean Header */}
       <header className="h-14 bg-white border-b border-slate-200/80 px-4 flex items-center justify-between shrink-0 z-30 shadow-xs relative">
         <div className="flex items-center gap-3">
-          <button 
-            type="button"
-            onClick={() => setIsCommunicationOpen(!isCommunicationOpen)}
-            className={`p-2 rounded-xl border transition-all flex items-center justify-center ${
-              isCommunicationOpen ? 'bg-blue-50 border-blue-200 text-blue-600 font-bold' : 'bg-slate-50 border-slate-200 text-slate-600 hover:bg-slate-100'
-            }`}
-            title="Toggle Room Communication Panel"
-          >
-            <span className="text-sm">💬</span>
-          </button>
-
-          <button 
-            type="button"
-            onClick={() => setIsChannelsOpen(!isChannelsOpen)}
-            className={`p-2 rounded-xl border transition-all flex items-center justify-center ${
-              isChannelsOpen ? 'bg-teal-50 border-teal-200 text-teal-600 font-bold' : 'bg-slate-50 border-slate-200 text-slate-600 hover:bg-slate-100'
-            }`}
-            title="Toggle Video Session Channels"
-          >
-            <span className="text-sm">📹</span>
-          </button>
-
-          <div className="h-4 w-[1px] bg-slate-200 ml-1" />
-
           <div className="flex items-center gap-2">
             <span className="relative flex h-2 w-2">
               <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75" />
@@ -627,7 +510,6 @@ export default function ImmersiveClassroomPage() {
                 </div>
                 <div className="flex-1 overflow-y-auto min-h-0 flex flex-col">
                   {activeTab === 'chat' ? (
-                    /* 🚀 Safe Real-Time Room Injection */
                     chatRoomId ? (
                       <ChatRooms roomId={chatRoomId} currentUserId={currentUserId || undefined} senderRole={userRole || "student"} />
                     ) : (
@@ -636,7 +518,15 @@ export default function ImmersiveClassroomPage() {
                       </div>
                     )
                   ) : (
-                    <FileDirectory folderPath={folderPath} />
+                    isDemoClass ? (
+                      <div className="flex-1 flex flex-col items-center justify-center text-center p-4 bg-slate-50 border border-dashed border-slate-200 rounded-xl">
+                        <span className="text-2xl mb-2">🔒</span>
+                        <p className="text-xs font-bold text-slate-700">Shared Storage Unavailable</p>
+                        <p className="text-[11px] text-slate-400 mt-1">Shared storage is available only for active Sessions.</p>
+                      </div>
+                    ) : (
+                      <FileDirectory folderPath={folderPath} />
+                    )
                   )}
                 </div>
               </div>
@@ -646,6 +536,7 @@ export default function ImmersiveClassroomPage() {
               <div onMouseDown={startAvResize} className="h-1 bg-slate-200 hover:bg-blue-400 cursor-ns-resize transition-all shrink-0 z-30" />
             )}
 
+            {/* Video Panel */}
             {isChannelsOpen && (
               <div 
                 style={{ height: isCommunicationOpen ? `${avHeight}px` : '100%' }} 
@@ -661,20 +552,14 @@ export default function ImmersiveClassroomPage() {
                   ✕
                 </button>
                 <div className="flex items-center justify-between px-1 shrink-0">
-                  <span className="text-[9px] font-black text-slate-400 uppercase tracking-wider">Channels</span>
+                  <span className="text-[9px] font-black text-slate-400 uppercase tracking-wider">Live Stream</span>
                   <span className="text-[9px] font-bold text-teal-600 font-mono mr-5">CONNECTED</span>
                 </div>
-                <div className={`grid gap-2 flex-1 min-h-0 ${isCommunicationOpen ? 'grid-cols-2' : 'grid-cols-1'}`}>
-                  <div className="bg-slate-900 rounded-xl relative flex items-center justify-center border border-slate-800 shadow-inner min-h-[60px]">
-                    <span className="text-[9px] text-slate-400 font-black uppercase absolute bottom-1.5 left-2 bg-slate-950/60 px-1.5 py-0.5 rounded">You</span>
-                  </div>
-                  <div className="bg-slate-900 rounded-xl relative flex items-center justify-center border border-slate-800 shadow-inner min-h-[60px]">
-                    <span className="text-[9px] text-slate-400 font-black uppercase absolute bottom-1.5 left-2 bg-slate-950/60 px-1.5 py-0.5 rounded">
-                      {otherPartyJoined ? otherPartyName : 'Offline'}
-                    </span>
-                    {!otherPartyJoined && <span className="text-[10px] text-slate-600 font-bold animate-pulse">Waiting...</span>}
-                  </div>
-                </div>
+
+                <VideoControls
+                  otherPartyJoined={otherPartyJoined}
+                  otherPartyName={otherPartyName}
+                />
               </div>
             )}
             
