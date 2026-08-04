@@ -10,14 +10,23 @@ import {
 } from 'react'
 import { useRouter, usePathname, useSearchParams } from 'next/navigation'
 import { supabase } from '@/lib/supabase'
-import NotificationCenter from '@/components/NotificationCenter'
+import DashboardShell, { type NavItem } from '@/components/dashboard/DashboardShell'
 
 // ---------------------------------------------------------------------------
-// 🏛️ Shared tab identity — single source of truth for the whole Parent view
+// 🏛️ Shared Tab Identity
 // ---------------------------------------------------------------------------
 export type TabID = 'home' | 'children' | 'book' | 'chat' | 'profile' | 'billing'
 
 const VALID_TABS: TabID[] = ['home', 'children', 'book', 'chat', 'profile', 'billing']
+
+export const NAV_ITEMS: NavItem<TabID>[] = [
+  { id: 'home', label: 'Home', icon: '🏠' },
+  { id: 'children', label: 'Children', icon: '🧒' },
+  { id: 'book', label: 'Book Tutor', icon: '🔍' },
+  { id: 'chat', label: 'Messages', icon: '💬' },
+  { id: 'billing', label: 'Billing', icon: '💳' },
+  { id: 'profile', label: 'Settings', icon: '⚙️', hideMobile: true }
+]
 
 interface ParentContextValue {
   parentId: string
@@ -28,7 +37,6 @@ interface ParentContextValue {
 
 const ParentContext = createContext<ParentContextValue | null>(null)
 
-// Named export hook (kept as a plain named function per Turbopack mapping requirement)
 export function useParent() {
   const ctx = useContext(ParentContext)
   if (!ctx) {
@@ -38,19 +46,20 @@ export function useParent() {
 }
 
 // ---------------------------------------------------------------------------
-// 🎯 Layout content — auth guard, profile fetch, context + URL sync, shell
+// 🎯 Layout Content Component
 // ---------------------------------------------------------------------------
 function ParentDashboardLayoutContent({ children }: { children: ReactNode }) {
   const router = useRouter()
   const pathname = usePathname()
-  const searchParams = useSearchParams() // 🔗 Safely extracted inside the Suspense Boundary
+  const searchParams = useSearchParams()
 
   const [activeTab, setActiveTab] = useState<TabID>('home')
   const [parentId, setParentId] = useState<string>('')
   const [parentName, setParentName] = useState<string>('')
+  const [parentPhotoUrl, setParentPhotoUrl] = useState<string>('')
   const [loading, setLoading] = useState(true)
 
-  // 🎯 URL -> STATE: handles direct links, refreshes, and browser back/forward pops
+  // Sync URL -> State
   useEffect(() => {
     if (pathname?.includes('/booking')) {
       setActiveTab('book')
@@ -62,20 +71,20 @@ function ParentDashboardLayoutContent({ children }: { children: ReactNode }) {
     if (incomingTab && VALID_TABS.includes(incomingTab)) {
       setActiveTab(incomingTab)
     } else {
-      setActiveTab('home') // Safe default layout configuration fallback
+      setActiveTab('home')
     }
   }, [searchParams, pathname])
 
-  // 🎯 STATE -> URL: pushed from clicks, keeps other query params intact, no history lock
+  // Sync State -> URL
   const handleTabChange = (tab: TabID) => {
-    setActiveTab(tab) // optimistic update so the UI feels instant
+    setActiveTab(tab)
 
     const params = new URLSearchParams(searchParams.toString())
     params.set('tab', tab)
     router.push(`${pathname}?${params.toString()}`, { scroll: false })
   }
 
-  // 🔐 Session & profile guarding
+  // Session & Security Check
   useEffect(() => {
     async function checkSecuritySession() {
       const { data: { user }, error: authError } = await supabase.auth.getUser()
@@ -83,95 +92,59 @@ function ParentDashboardLayoutContent({ children }: { children: ReactNode }) {
 
       const { data: profile, error: dbError } = await supabase
         .from('parents')
-        .select('id, name')
+        .select('id, name, avatar_url')
         .eq('id', user.id)
         .maybeSingle()
 
       if (dbError || !profile) return router.push('/login')
 
       setParentId(profile.id)
-      setParentName(profile.name)
+      setParentName(profile.name || 'Parent')
+      if (profile.avatar_url) setParentPhotoUrl(profile.avatar_url)
       setLoading(false)
     }
     checkSecuritySession()
   }, [router])
 
+  const handleSignOut = async () => {
+    await supabase.auth.signOut()
+    router.push('/login')
+  }
+
   if (loading) {
     return (
-      <div className="w-screen h-screen bg-slate-50 flex items-center justify-center">
-        <span className="w-6 h-6 border-4 border-blue-600 border-t-transparent rounded-full animate-spin" />
+      <div className="w-screen h-screen bg-slate-900 flex flex-col items-center justify-center gap-3">
+        <span className="w-8 h-8 border-4 border-blue-500 border-t-transparent rounded-full animate-spin" />
+        <p className="text-xs text-slate-400 font-medium">Loading Workspace...</p>
       </div>
     )
   }
 
   return (
     <ParentContext.Provider value={{ parentId, parentName, activeTab, handleTabChange }}>
-      <div className="w-screen h-screen flex flex-col sm:flex-row bg-slate-50 text-slate-900 overflow-hidden">
-        {/* SIDEBAR SHELL — the page portals its nav buttons into #parent-sidebar-nav */}
-        <aside className="w-full sm:w-64 bg-white border-b sm:border-b-0 sm:border-r border-slate-200 flex flex-col justify-between shrink-0 z-20">
-          <div className="p-5 sm:p-6">
-            <div className="mb-6 hidden sm:block">
-              <h2 className="text-xl font-black text-blue-600 tracking-tight">Tuition Hero</h2>
-              <p className="text-[11px] text-slate-400 mt-0.5 font-semibold">Parent Console</p>
-            </div>
-
-            {/* 🎨 Portal target: page.tsx injects nav buttons built from navItems here */}
-            <nav
-              id="parent-sidebar-nav"
-              className="flex flex-row sm:flex-col gap-1 overflow-x-auto sm:overflow-x-visible pb-2 sm:pb-0"
-            />
-          </div>
-
-          <div className="p-4 border-t border-slate-100 hidden sm:block">
-            <button
-              type="button"
-              onClick={async () => { await supabase.auth.signOut(); router.push('/login') }}
-              className="w-full py-2.5 text-xs font-black uppercase tracking-wider text-red-500 hover:bg-red-50 rounded-xl transition"
-            >
-              Sign Out
-            </button>
-          </div>
-        </aside>
-
-        {/* DASHBOARD VIEWPORT MATRIX */}
-        <div className="flex-1 flex flex-col overflow-hidden relative">
-          <header className="h-16 bg-white border-b border-slate-200 px-6 sm:px-8 flex items-center justify-between shrink-0">
-            <span className="text-xs font-bold text-slate-400">
-              Welcome back, <span className="text-slate-700">{parentName}</span>
-            </span>
-            <div className="flex items-center gap-4">
-              <NotificationCenter userId={parentId} />
-              <button
-                type="button"
-                onClick={() => handleTabChange('profile')}
-                className={`w-8 h-8 rounded-full border transition flex items-center justify-center font-bold text-xs shadow-2xs ${activeTab === 'profile' ? 'bg-blue-600 border-blue-600 text-white' : 'bg-slate-100 text-slate-600 border-slate-200'}`}
-              >
-                {parentName ? parentName.charAt(0).toUpperCase() : 'P'}
-              </button>
-            </div>
-          </header>
-
-          {/* 🎨 Portal target: page.tsx projects the active tab's content here */}
-          <main className="flex-1 overflow-y-auto p-6 sm:p-8 max-w-5xl w-full mx-auto">
-            <div id="parent-main-viewport" />
-          </main>
-        </div>
-      </div>
-
-      {/* The Page (App Router's `children`) renders here — it has no visible
-          layout of its own, it only reads context and portals into the
-          targets above (plus its modal, which is fixed-position). */}
-      {children}
+      <DashboardShell<TabID>
+        appTitle="METIS"
+        roleTitle="Parent Portal"
+        userDisplayName={parentName}
+        userPhotoUrl={parentPhotoUrl}
+        userId={parentId}
+        navItems={NAV_ITEMS}
+        activeTab={activeTab}
+        onTabChange={handleTabChange}
+        onSignOut={handleSignOut}
+        onProfileClick={() => handleTabChange('profile')}
+      >
+        {children}
+      </DashboardShell>
     </ParentContext.Provider>
   )
 }
 
-// 📦 Safe Export Root Wrapped in a Next.js Client Suspense Boundary Container
 export default function ParentDashboardLayout({ children }: { children: ReactNode }) {
   return (
     <Suspense fallback={
-      <div className="w-screen h-screen bg-slate-50 flex items-center justify-center">
-        <span className="w-6 h-6 border-4 border-blue-600 border-t-transparent rounded-full animate-spin" />
+      <div className="w-screen h-screen bg-slate-900 flex items-center justify-center">
+        <span className="w-8 h-8 border-4 border-blue-500 border-t-transparent rounded-full animate-spin" />
       </div>
     }>
       <ParentDashboardLayoutContent>{children}</ParentDashboardLayoutContent>
