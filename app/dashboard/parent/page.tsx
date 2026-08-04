@@ -21,20 +21,22 @@ function ParentDashboardContent() {
       {activeTab === 'home' && <OverviewTab parentId={parentId} />}
       {activeTab === 'children' && <ManageChildrenTab parentId={parentId} />}
       {activeTab === 'book' && <BookingProcedureTab parentId={parentId} />}
-      {activeTab === 'profile' && <ProfileTab parentId={parentId} />}
-      {activeTab === 'billing' && <BillingTab />}
       {activeTab === 'chat' && <ChatRoom parentId={parentId} />}
+      {activeTab === 'billing' && <BillingTab />}
+      {activeTab === 'profile' && <ProfileTab parentId={parentId} />}
     </div>
   )
 }
 
 export default function ParentDashboard() {
   return (
-    <Suspense fallback={
-      <div className="py-20 text-center text-slate-400 font-medium text-xs uppercase tracking-widest animate-pulse">
-        Loading Viewport...
-      </div>
-    }>
+    <Suspense
+      fallback={
+        <div className="py-20 text-center text-slate-400 font-medium text-xs uppercase tracking-widest animate-pulse">
+          Loading Viewport...
+        </div>
+      }
+    >
       <ParentDashboardContent />
     </Suspense>
   )
